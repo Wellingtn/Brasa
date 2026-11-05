@@ -6,6 +6,8 @@ use std::borrow::Cow;
 use gpui::{AssetSource, Result, SharedString};
 
 static FILES: &[(&str, &[u8])] = &[
+    // logo da Brasa: a chama com o prompt e o nome (cópia de branding/brasa-logo-dark.png)
+    ("brand/brasa-logo.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo.png"))),
     ("icons/add.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/add.svg"))),
     ("icons/alert-triangle.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/alert-triangle.svg"))),
     ("icons/arrow-left.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/arrow-left.svg"))),

@@ -49,46 +49,6 @@ fn tiny_btn(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div
         .child(label)
 }
 
-/// Marca da Brasa desenhada no app: o ❯ aceso como brasa (com brilho) e a faísca do cursor,
-/// sobre o quadrado escuro com fundo quente. Mesma forma de `branding/brasa-icon.svg`.
-/// `glow` (0–1) é a força da brasa: baixa com o app parado, tremeluzindo enquanto um comando roda.
-pub fn brasa_mark(size: f32, glow: f32) -> impl IntoElement {
-    div()
-        .flex_none()
-        .size(px(size))
-        .rounded(px(size * 0.24))
-        .bg(gpui::linear_gradient(0., gpui::linear_color_stop(rgb(0x4a2219), 0.0), gpui::linear_color_stop(rgb(0x161215), 1.0)))
-        .child(
-            gpui::canvas(
-                |_, _, _| {},
-                move |b: gpui::Bounds<gpui::Pixels>, _, window, _| {
-                    let (x, y, s) = (f32::from(b.origin.x), f32::from(b.origin.y), f32::from(b.size.width));
-                    let p = |fx: f32, fy: f32| gpui::point(px(x + s * fx), px(y + s * fy));
-                    // brilho (traço largo e transparente) e o traço da brasa por cima
-                    let halo = (0x10 as f32 + glow * 0xa0 as f32) as u32;
-                    // o miolo também acende: mais claro quanto mais forte a brasa
-                    let core = if glow > 0.85 { 0xffd2b0ff } else if glow > 0.6 { 0xfcae86ff } else { 0xe8805fff };
-                    for (w, color) in [(0.26, 0xf59a7400 | halo), (0.22, 0xf59a7400 | halo / 2), (0.105, core)] {
-                        let mut pb = gpui::PathBuilder::stroke(px(s * w));
-                        pb.move_to(p(0.30, 0.32));
-                        pb.line_to(p(0.56, 0.52));
-                        pb.line_to(p(0.30, 0.72));
-                        if let Ok(path) = pb.build() {
-                            window.paint_path(path, rgba(color));
-                        }
-                    }
-                    // faísca do cursor
-                    let r = s * 0.045;
-                    window.paint_quad(
-                        gpui::fill(gpui::Bounds::new(p(0.69 - 0.045, 0.69 - 0.045), gpui::size(px(r * 2.0), px(r * 2.0))), rgb(0xffd9b3))
-                            .corner_radii(px(r)),
-                    );
-                },
-            )
-            .size_full(),
-        )
-}
-
 /// Botão com contorno, ícone e texto ("Nova Nota", "Nova Pasta").
 fn outline_btn(id: &'static str, icon: &'static str, label: &'static str, color: u32) -> Stateful<Div> {
     div()
@@ -214,9 +174,14 @@ impl Workspace {
                                     }
                                 }),
                             )
-                            .gap(px(8.))
-                            .child(brasa_mark(22., self.ember_glow()))
-                            .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).text_color(rgb(0xf2b394)).child("brasa")),
+                            // logo da Brasa (a chama com o prompt e o nome, branding/brasa-logo-dark.png); a brasa tremeluz enquanto um comando roda
+                            .child(
+                                gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded("brand/brasa-logo.png".into())))
+                                    .h(px(30.))
+                                    .w(px(92.))
+                                    .object_fit(gpui::ObjectFit::Contain)
+                                    .opacity(0.72 + 0.28 * self.ember_glow()),
+                            ),
                     )
                     .child(
                         div()
@@ -236,7 +201,26 @@ impl Workspace {
                     ),
             )
             .child(self.render_side_switch(cx))
-            .child(scroll_list(div().id("side-list").px_2().pb_4().flex().flex_col().children(body), &self.side_scroll))
+            // soltar em qualquer lugar da lista que não seja uma pasta tira o item da pasta (volta para a raiz);
+            // as pastas e as linhas dentro delas pegam o drop primeiro, então só o que sobra chega aqui
+            .child(scroll_list(
+                div()
+                    .id("side-list")
+                    .px_2()
+                    .pb_4()
+                    .flex()
+                    .flex_col()
+                    .children(body)
+                    .on_drop(cx.listener(|this, item: &DraggedSession, _, cx| {
+                        this.move_session(item, None);
+                        cx.notify();
+                    }))
+                    .on_drop(cx.listener(|this, item: &DraggedNote, _, cx| {
+                        this.move_note(item, "");
+                        cx.notify();
+                    })),
+                &self.side_scroll,
+            ))
             .child(self.render_side_footer(cx))
             .into_any_element()
     }
@@ -435,6 +419,7 @@ impl Workspace {
         let cwd = self.session_label(i).0;
         let sid = self.tabs[i].session;
         let dragged = DraggedSession { session: sid, label: label.clone() };
+        let folder = self.tabs[i].folder;
         let renaming = self.naming.as_ref().filter(|n| n.terminal == Some(sid)).map(|n| n.text.clone());
         list_row(("term", i), active)
             .pl(px(8. + INDENT * depth as f32 + if depth > 0 { 6. } else { 0. }))
@@ -462,6 +447,13 @@ impl Workspace {
                 )
             })
             .on_drag(dragged, |item, _, _, cx| item.preview(cx))
+            // dentro de uma pasta: soltar outro terminal em cima dele o põe na mesma pasta
+            .when(folder.is_some(), |d| {
+                d.drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(CORAL_DIM))).on_drop(cx.listener(move |this, item: &DraggedSession, _, cx| {
+                    this.move_session(item, folder);
+                    cx.notify();
+                }))
+            })
             .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                 this.switch_tab(i);
                 // duplo clique renomeia o terminal
@@ -647,6 +639,8 @@ impl Workspace {
         // renomeando esta pasta: campo no lugar do nome
         let renaming = self.naming.as_ref().filter(|n| !n.sessions && n.rename.as_deref() == Some(rel.as_str())).map(|n| n.text.clone());
         let dragged = DraggedNote { rel: rel.clone(), is_dir, label: label.clone() };
+        // pasta onde a linha está (vazio = raiz): onde cai uma nota solta em cima de outra nota
+        let parent_dir = rel.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
         let (rel_open, rel_trash, rel_ren, rel_drop) = (rel.clone(), rel.clone(), rel.clone(), rel);
         list_row(("note-row", i), is_current)
             .pl(px(pad))
@@ -684,6 +678,12 @@ impl Workspace {
             .when(is_dir, |d| {
                 d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(AMBER_DIM))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
                     this.move_note(item, &rel_drop);
+                    cx.notify();
+                }))
+            })
+            .when(!is_dir && !parent_dir.is_empty(), |d| {
+                d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(AMBER_DIM))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
+                    this.move_note(item, &parent_dir);
                     cx.notify();
                 }))
             })

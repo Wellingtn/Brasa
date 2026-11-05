@@ -948,18 +948,28 @@ impl Workspace {
         let font = self.icon_font.clone();
         let mono = self.mono.clone();
 
-        use crate::files_pane::{date_string, size_string, Col};
-        // colunas: (rótulo, ordenação, largura; None = ocupa o resto), alinhada à direita
-        let narrow = r.w < 520.0;
+        use crate::files_pane::{date_string, size_label, Col};
+        // colunas: (rótulo, ordenação, largura; None = ocupa o resto), alinhada à direita.
+        // Em painel estreito as colunas saem na ordem Tipo, Modificado, Permissões; o nome (mínimo 110 px) e o
+        // tamanho ficam sempre.
+        let mut room = r.w - 12.0 - 110.0;
+        let mut keep: Vec<&str> = Vec::new();
+        for (label, w) in [("Tamanho", 76.0), ("Permissões", 96.0), ("Modificado", 118.0), ("Tipo", 124.0)] {
+            if room >= w || label == "Tamanho" {
+                room -= w;
+                keep.push(label);
+            }
+        }
+        let (show_perm, show_date, show_kind) = (keep.contains(&"Permissões"), keep.contains(&"Modificado"), keep.contains(&"Tipo"));
         let cols: Vec<(&str, Option<Col>, Option<f32>, bool)> = [
             ("Nome", Some(Col::Name), None, false),
-            ("Permissões", None, Some(104.0), false),
+            ("Permissões", None, Some(96.0), false),
             ("Modificado", Some(Col::Modified), Some(118.0), false),
             ("Tamanho", Some(Col::Size), Some(76.0), true),
             ("Tipo", Some(Col::Kind), Some(124.0), false),
         ]
         .into_iter()
-        .filter(|c| !narrow || !matches!(c.0, "Permissões" | "Tipo"))
+        .filter(|c| c.0 == "Nome" || keep.contains(&c.0))
         .collect();
         let cell = |w: Option<f32>, right: bool| {
             let d = div().px(px(8.)).flex().items_center().overflow_hidden().whitespace_nowrap();
@@ -1019,7 +1029,7 @@ impl Workspace {
                 _ => {
                     let i = vi - usize::from(up_row.is_some());
                     let e = &rows[i];
-                    (e.name.clone(), e.is_dir, e.perm.clone(), date_string(e.mtime, now, tz), if e.is_dir { "-".into() } else { size_string(e.size) }, e.kind.clone(), Some(i))
+                    (e.name.clone(), e.is_dir, e.perm.clone(), date_string(e.mtime, now, tz), size_label(e), e.kind.clone(), Some(i))
                 }
             };
             let sel = idx.is_some() && idx == selected;
@@ -1049,10 +1059,10 @@ impl Workspace {
                             }))
                             .child(div().min_w_0().truncate().text_color(rgb(TEXT)).child(name)),
                     )
-                    .when(!narrow, |d| d.child(cell(Some(104.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(perm)))
-                    .child(cell(Some(118.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(date))
+                    .when(show_perm, |d| d.child(cell(Some(96.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(perm)))
+                    .when(show_date, |d| d.child(cell(Some(118.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(date)))
                     .child(cell(Some(76.0), true).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(size))
-                    .when(!narrow, |d| d.child(cell(Some(124.0), false).text_size(px(12.)).text_color(rgb(MUTED)).child(kind)))
+                    .when(show_kind, |d| d.child(cell(Some(124.0), false).text_size(px(12.)).text_color(rgb(MUTED)).child(kind)))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         this.focused_pane = Some(PaneKind::Files);
                         let open = ev.click_count() >= 2;

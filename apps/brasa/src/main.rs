@@ -524,6 +524,10 @@ impl Workspace {
                     ws.monitor.sample(procs);
                     changed |= monitor || ws.monitor.cpu.round() != shown;
                 }
+                // tamanhos de pastas que terminaram de ser somados no gerenciador de arquivos
+                if let Some(f) = ws.files.as_mut() {
+                    changed |= f.apply_sizes();
+                }
                 // comando rodando: atualiza o contador "Executando… (Ns)" e faz a brasa do logo tremeluzir
                 changed |= ws.tabs.iter().any(|t| !t.cmd_starts.is_empty());
                 // só redesenha quando algo na tela mudou
@@ -1913,4 +1917,28 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn out(id: SessionId, s: &str) -> (SessionId, PtyMsg) {
+        (id, PtyMsg::Output(s.as_bytes().to_vec()))
+    }
+
+    #[test]
+    fn coalesce_merges_consecutive_output_of_the_same_terminal() {
+        let batch = vec![out(1, "ab"), out(1, "cd"), out(2, "x"), out(1, "e"), (1, PtyMsg::Exit), out(1, "f")];
+        let merged = coalesce_output(batch);
+        let shown: Vec<String> = merged
+            .iter()
+            .map(|(id, m)| match m {
+                PtyMsg::Output(b) => format!("{id}:{}", String::from_utf8_lossy(b)),
+                PtyMsg::Exit => format!("{id}:exit"),
+            })
+            .collect();
+        // a ordem entre terminais e o fim da sessão é preservada; só leituras vizinhas do mesmo terminal se juntam
+        assert_eq!(shown, ["1:abcd", "2:x", "1:e", "1:exit", "1:f"]);
+    }
 }
