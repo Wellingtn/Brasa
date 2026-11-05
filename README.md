@@ -20,10 +20,31 @@
 - **Cada comando é um bloco.** Você vê o que rodou, quanto tempo levou, se deu certo, e copia só a saída de que precisa.
 - **Notas que executam.** Escreva em Markdown e rode um bloco de código direto no terminal.
 - **Sessões organizadas.** Dê nome aos terminais, agrupe em pastas e divida a tela lado a lado.
-- **Arquivos e desempenho ao lado.** Gerenciador de arquivos com visualizador de imagens, e monitor de CPU, memória e processos.
-- **Leve.** Cerca de 120 MB de memória e 1% de CPU parado, desenhado pela placa de vídeo.
+- **Arquivos e desempenho ao lado.** Gerenciador de arquivos com tamanho das pastas, permissões e visualizador de imagens, e monitor de CPU, memória e processos.
+- **Leve.** Cerca de 120 MB de memória e perto de 0% de CPU parado, desenhado pela placa de vídeo. Veja os números em [Desempenho](#desempenho).
 
 ## Instalação
+
+### Pelo GitHub (recomendado)
+
+Baixe o instalador da versão mais recente na página de [Releases](https://github.com/Wellingtn/brasa/releases/latest).
+
+**.deb** (Ubuntu, Pop!_OS, Debian e derivados):
+
+```bash
+sudo apt install ./brasa_*.deb
+```
+
+**AppImage** (outras distribuições):
+
+```bash
+chmod +x Brasa-*-x86_64.AppImage
+./Brasa-*-x86_64.AppImage
+```
+
+O Brasa desenha pela placa de vídeo e precisa de um driver Vulkan. No Ubuntu e derivados: `sudo apt install mesa-vulkan-drivers`.
+
+### Compilando do código-fonte
 
 Você precisa de [Rust](https://rustup.rs) e de algumas bibliotecas do sistema. No Ubuntu, Pop!_OS e derivados:
 
@@ -54,6 +75,26 @@ Testado no Pop!_OS 24.04 com GNOME 46.
 | Desempenho (CPU, memória, processos) | `Ctrl+Shift+M` |
 | Buscar na saída | `Ctrl+Shift+F` |
 | Zoom | `Ctrl+=` / `Ctrl+-` |
+
+## Desempenho
+
+Medido na máquina de desenvolvimento (Pop!_OS 24.04, GNOME 46, Wayland, placa Intel), com o app recém-aberto:
+
+| Medida | Resultado |
+|---|---|
+| Abrir a janela | cerca de 0,1 s |
+| Memória parado | cerca de 119 MB |
+| CPU parado | cerca de 0,1% |
+| Despejar 100 MB de texto (`cat`) | cerca de 63 MB/s |
+
+Parado, o Brasa só acorda uma vez por segundo, para atualizar o medidor de CPU.
+
+## Desenvolvimento
+
+```bash
+cargo test                     # crates leves (pty, markdown, arquivos, sugestões, editor)
+cargo test -p brasa --release  # o app (compila o GPUI, demora mais)
+```
 
 ## Licença
 
