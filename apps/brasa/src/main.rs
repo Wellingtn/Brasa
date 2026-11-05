@@ -76,6 +76,25 @@ enum PtyMsg {
     Exit,
 }
 
+/// Quantas leituras do PTY cabem na fila entre o leitor e a tela (e quantas a tela processa por rodada).
+const PTY_QUEUE: usize = 1024;
+
+/// Junta leituras seguidas do mesmo terminal numa só, para o terminal processar a saída uma vez por rodada
+/// (o PTY entrega pedaços pequenos, e analisar os blocos a cada pedaço custava mais que a própria saída).
+fn coalesce_output(batch: Vec<(SessionId, PtyMsg)>) -> Vec<(SessionId, PtyMsg)> {
+    let mut out: Vec<(SessionId, PtyMsg)> = Vec::with_capacity(batch.len().min(8));
+    for (id, msg) in batch {
+        if let (PtyMsg::Output(bytes), Some((last_id, PtyMsg::Output(acc)))) = (&msg, out.last_mut()) {
+            if *last_id == id {
+                acc.extend_from_slice(bytes);
+                continue;
+            }
+        }
+        out.push((id, msg));
+    }
+    out
+}
+
 struct ChannelEvents(async_channel::Sender<(SessionId, PtyMsg)>);
 
 impl PtyEvents for ChannelEvents {
@@ -478,7 +497,9 @@ impl Workspace {
         let (cell_w, cell_h) = measure(window, &mono, DEFAULT_FONT);
         let ed_cell = measure(window, &mono, ED_FONT);
 
-        let (tx, rx) = async_channel::unbounded();
+        // fila limitada: se a tela não acompanha, o leitor do PTY espera e o programa (ex.: `cat`) desacelera,
+        // em vez de a saída inteira acumular na memória
+        let (tx, rx) = async_channel::bounded(PTY_QUEUE);
 
         // relógio do cursor: pisca a cada CARET_BLINK (fica aceso enquanto você digita) e, de carona,
         // atualiza o "Executando… (Ns)"
@@ -520,9 +541,15 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             while let Ok(first) = rx.recv().await {
                 let mut batch = vec![first];
-                while let Ok(more) = rx.try_recv() {
-                    batch.push(more);
+                while batch.len() < PTY_QUEUE {
+                    match rx.try_recv() {
+                        Ok(more) => batch.push(more),
+                        Err(_) => break,
+                    }
                 }
+                // sobrou saída na fila: depois desta rodada, cede a vez para a tela desenhar
+                let more_pending = !rx.is_empty();
+                let batch = coalesce_output(batch);
                 let alive = this.update(cx, |ws, cx| {
                     for (id, msg) in batch {
                         ws.on_pty(id, msg);
@@ -532,6 +559,9 @@ impl Workspace {
                 });
                 if alive.is_err() {
                     break;
+                }
+                if more_pending {
+                    cx.background_executor().timer(std::time::Duration::from_millis(1)).await;
                 }
             }
         })
