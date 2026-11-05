@@ -1,0 +1,16 @@
+[package]
+name = "brasa"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui = "0.2.2"
+alacritty_terminal = "0.26"
+dirs.workspace = true
+async-channel = "2"
+ox-pty = { path = "../../crates/ox-pty" }
+ox-markdown = { path = "../../crates/ox-markdown" }
+ox-files = { path = "../../crates/ox-files" }
+ox-suggest = { path = "../../crates/ox-suggest" }
+ox-editor = { path = "../../crates/ox-editor" }

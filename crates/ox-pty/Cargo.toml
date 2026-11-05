@@ -1,0 +1,9 @@
+[package]
+name = "ox-pty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+thiserror.workspace = true

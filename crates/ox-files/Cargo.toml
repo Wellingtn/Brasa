@@ -1,0 +1,13 @@
+[package]
+name = "ox-files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

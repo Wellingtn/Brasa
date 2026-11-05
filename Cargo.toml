@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ox-pty",
+    "crates/ox-markdown",
+    "crates/ox-files",
+    "crates/ox-suggest",
+    "crates/ox-editor",
+    "apps/brasa",
+]
+# `cargo test` na raiz roda só os crates leves, sem compilar o GPUI (pesado).
+default-members = [
+    "crates/ox-pty",
+    "crates/ox-markdown",
+    "crates/ox-files",
+    "crates/ox-suggest",
+    "crates/ox-editor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+portable-pty = "0.9"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+thiserror = "2"
+tempfile = "3"
+dirs = "6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# xattr 0.2.3 (via zed-async-tar) usa libc::ENOATTR, que não existe no Linux em libc recentes.
+# O patch troca por ENODATA, que é o equivalente no Linux.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
+# blade-graphics 0.7.1 (GPU do GPUI) rejeita a Intel se /etc/prime-discrete diz "on", mesmo sem NVIDIA
+# na máquina, e cai no desenho pela CPU (llvmpipe, centenas de % de CPU). Corrigido em vendor/blade-graphics.
+blade-graphics = { path = "vendor/blade-graphics" }
