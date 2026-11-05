@@ -5,8 +5,6 @@
   <img src="branding/brasa-logo.png" alt="Brasa" width="420">
 </picture>
 
-**Um terminal que também escreve.** Comandos em blocos, notas que rodam, arquivos e desempenho no mesmo lugar.
-
 ![Linux](https://img.shields.io/badge/Linux-desktop-4a86cf?style=flat-square&logo=linux&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-GPUI-dea584?style=flat-square&logo=rust&logoColor=black)
 ![Licença](https://img.shields.io/badge/licença-AGPL--3.0-e9b25f?style=flat-square)
