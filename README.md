@@ -5,6 +5,8 @@
   <img src="branding/brasa-logo.png" alt="Brasa" width="420">
 </picture>
 
+**Terminal desktop em Rust com blocos de comando, notas executáveis e gerenciador de arquivos**
+
 ![Linux](https://img.shields.io/badge/Linux-desktop-4a86cf?style=flat-square&logo=linux&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-GPUI-dea584?style=flat-square&logo=rust&logoColor=black)
 ![Licença](https://img.shields.io/badge/licença-AGPL--3.0-e9b25f?style=flat-square)
