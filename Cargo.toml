@@ -45,3 +45,6 @@ xattr = { path = "vendor/xattr" }
 # blade-graphics 0.7.1 (GPU do GPUI) rejeita a Intel se /etc/prime-discrete diz "on", mesmo sem NVIDIA
 # na máquina, e cai no desenho pela CPU (llvmpipe, centenas de % de CPU). Corrigido em vendor/blade-graphics.
 blade-graphics = { path = "vendor/blade-graphics" }
+# gpui 0.2.2 (Wayland) pede um quadro novo a cada vsync mesmo com a janela parada: ~60 acordadas por segundo e ~1% de CPU
+# no repouso. Corrigido em vendor/gpui: o laço de quadros só roda enquanto há o que desenhar e é acordado por invalidação.
+gpui = { path = "vendor/gpui" }
