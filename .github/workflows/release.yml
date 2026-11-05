@@ -1,0 +1,71 @@
+name: Release
+
+# Roda ao criar uma tag como v0.1.0 e anexa o .deb e o AppImage à release.
+# Também pode ser rodado à mão (Actions > Release > Run workflow) para testar o build sem publicar.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # Ubuntu 22.04 tem a glibc mais antiga disponível, então o binário roda em mais distribuições.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir a versão da tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          versao=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "${GITHUB_REF_NAME}" != "v${versao}" ]; then
+            echo "A tag ${GITHUB_REF_NAME} não bate com a versão ${versao} do Cargo.toml" >&2
+            exit 1
+          fi
+
+      - name: Instalar dependências do sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-xcb-dev libxcb1-dev libvulkan-dev libfontconfig-dev libfreetype-dev \
+            desktop-file-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar
+        run: cargo build -p brasa --release --locked
+
+      - name: Gerar o .deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb -p brasa --no-build
+          mkdir -p dist
+          cp target/debian/*.deb dist/
+
+      - name: Gerar o AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          desktop-file-validate packaging/brasa.desktop
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+          cp branding/icons/brasa-256.png brasa.png
+          ./linuxdeploy --appdir AppDir -e target/release/brasa -d packaging/brasa.desktop -i brasa.png --output appimage
+          versao=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mv Brasa-*.AppImage "dist/Brasa-${versao}-x86_64.AppImage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brasa-linux
+          path: dist/*
+
+      - name: Publicar na release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

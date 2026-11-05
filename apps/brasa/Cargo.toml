@@ -3,6 +3,7 @@ name = "brasa"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Terminal em blocos com notas executáveis, gerenciador de arquivos e monitor de desempenho"
 
 [dependencies]
 gpui = "0.2.2"
@@ -14,3 +15,19 @@ ox-markdown = { path = "../../crates/ox-markdown" }
 ox-files = { path = "../../crates/ox-files" }
 ox-suggest = { path = "../../crates/ox-suggest" }
 ox-editor = { path = "../../crates/ox-editor" }
+
+[package.metadata.deb]
+name = "brasa"
+section = "utils"
+priority = "optional"
+depends = "$auto, libvulkan1"
+recommends = "mesa-vulkan-drivers"
+extended-description = "Brasa é um terminal para Linux em que cada comando vira um bloco, com notas em Markdown que executam, gerenciador de arquivos e monitor de CPU, memória e processos."
+assets = [
+    ["target/release/brasa", "usr/bin/brasa", "755"],
+    ["../../packaging/brasa.desktop", "usr/share/applications/brasa.desktop", "644"],
+    ["../../branding/icons/brasa-48.png", "usr/share/icons/hicolor/48x48/apps/brasa.png", "644"],
+    ["../../branding/icons/brasa-128.png", "usr/share/icons/hicolor/128x128/apps/brasa.png", "644"],
+    ["../../branding/icons/brasa-256.png", "usr/share/icons/hicolor/256x256/apps/brasa.png", "644"],
+    ["../../branding/icons/brasa-512.png", "usr/share/icons/hicolor/512x512/apps/brasa.png", "644"],
+]
