@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="branding/brasa-wordmark.png" alt="Brasa" width="420">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="branding/brasa-logo-dark.png">
+  <img src="branding/brasa-logo.png" alt="Brasa" width="420">
+</picture>
 
 **Um terminal que também escreve.** Comandos em blocos, notas que rodam, arquivos e desempenho no mesmo lugar.
 
