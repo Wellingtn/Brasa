@@ -11,7 +11,7 @@
 ![Rust](https://img.shields.io/badge/Rust-GPUI-dea584?style=flat-square&logo=rust&logoColor=black)
 ![Licença](https://img.shields.io/badge/licença-AGPL--3.0-e9b25f?style=flat-square)
 
-<img src="docs/captura.png" alt="Brasa com uma nota, um terminal e o painel de CPU" width="860">
+<img src="docs/captura.png" alt="Brasa com quatro terminais, o gerenciador de arquivos e o painel de CPU" width="860">
 
 </div>
 
