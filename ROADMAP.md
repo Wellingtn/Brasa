@@ -3,6 +3,32 @@
 Ordenado por custo-benefício: o que é mais útil e mais fácil de fazer vem primeiro.
 Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 
+## Visão geral das versões
+
+| Versão | O que traz | Situação |
+|---|---|---|
+| 1.0.0 | Terminal em blocos, notas em Markdown que executam, gerenciador de arquivos, monitor de CPU/memória/processos | Publicada |
+| 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
+| 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (atual: 1.2.3) |
+| 1.3.0 | Imagens no terminal (Kitty), SSH integrado, mais vazão | A fazer |
+| 1.4.0 | MCP | A fazer |
+| 1.5.0 | Editor de banco de dados (SQLite primeiro) | A fazer |
+| 2.0.0 | macOS e Windows | A fazer |
+
+## Pendências e débitos (o que ficou sem fechar)
+
+| Item | Detalhe | Quando olhar |
+|---|---|---|
+| Flatpak nunca aberto | Foi construído pelo workflow e nunca instalado. Risco principal: o terminal achar o shell do computador por `flatpak-spawn --host` (só a montagem do comando tem teste) | Antes de divulgar o Flatpak |
+| `.rpm` sem o app aberto | Instala num Fedora 45 limpo (contêiner) e as bibliotecas estão todas; falta abrir o app numa máquina com tela. Pacote sem assinatura | Antes de divulgar o `.rpm` |
+| Atualização no AppImage | Provada só no `.deb` (1.2.2 para 1.2.3); no AppImage o código troca o próprio arquivo e ainda não foi exercitado | Na próxima versão publicada, a partir de um AppImage |
+| Comparação de latência | Método e script prontos; falta medir em tela real com GPU contra kitty, alacritty, foot, wezterm | Quando houver forma de medir em tela real (ver `docs/latencia.md`) |
+| Releases 1.2.0 e 1.2.1 apagadas | Tinham a atualização dentro do app quebrada (filtro de endereço sensível a maiúsculas). Quem as instalou troca à mão uma vez | Nada a fazer; só avisar se alguém perguntar |
+| Captura do README | Mostra a pasta pessoal e o nome de usuário do autor num repositório público | Trocar por uma captura com pasta de exemplo |
+| Pacotes sem assinatura | `.deb`, `.rpm` e AppImage só têm soma SHA-256; sem assinatura GPG | Se um dia houver repositório próprio |
+| Estado de `branding/logo/` e `docs/relatorio-comparativo.md` | Ficam fora do repositório de propósito | Decidir se entram |
+| Saída imediata do app numa aba do terminal do Claude | Aconteceu uma vez, sem causa achada; o AppImage abre normalmente (o problema era a permissão de execução) | Só se voltar |
+
 ## 1.1.0 — Acabamento e personalização (feito)
 - Estilização "brasa" no app: fio de brasa sob o cabeçalho que respira enquanto um comando roda e o logo que acompanha a cor.
 - Configurações (engrenagem na barra superior): aba Geral e aba Aparência, com cor do tema por roda de matizes ou hexadecimal, fundo, fonte com busca e tamanho em régua, tudo salvo em `~/.config/brasa`.
@@ -18,12 +44,12 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
-| **M1. Atualização dentro do app** | Botão "Atualizar", verificação SHA-256, `SHA256SUMS` na release | P | Feito; provado de 1.2.2 para 1.2.3 no `.deb` (AppImage ainda sem teste) |
+| **M1. Atualização dentro do app** | Botão "Atualizar", verificação SHA-256, `SHA256SUMS` na release | P | Feito; provado de 1.2.2 para 1.2.3 no `.deb` (AppImage em Pendências) |
 | **M2. Autocompletar e histórico inteligente** | Ranking por frequência, recência e pasta; busca no histórico (`Ctrl+R`); mais comandos com sugestão de opções | M | Feito |
 | **M3. Notas executáveis mais ricas** | Variáveis, "Rodar todos" em sequência, saída guardada na nota | M | Feito |
 | **M4. Latência comparada** | Método repetível, medição em outros terminais, tabela e script no repositório | P a M | Método e script prontos; comparação justa com terminais de GPU em aberto (ver `docs/latencia.md`) |
-| **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | Pacotes prontos no workflow; falta testar em Fedora e Flatpak reais |
-| **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Feito (1.2.0 a 1.2.3); falta a captura de tela nova no README |
+| **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | Pacotes publicados; `.rpm` instala num Fedora limpo, Flatpak não aberto (ver Pendências) |
+| **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Feito (1.2.0 a 1.2.3; 1.2.0 e 1.2.1 foram apagadas por terem a atualização quebrada) |
 
 ### M1. Atualização dentro do app
 - Já está: botão na barra superior e nas configurações, AppImage troca o próprio arquivo, `.deb` instala com `pkexec apt-get`, soma conferida, cópia compilada só avisa.
