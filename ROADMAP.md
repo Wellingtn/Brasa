@@ -12,18 +12,18 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 - Atalhos configuráveis: clique no atalho nas configurações e aperte o novo; ficam em `~/.config/brasa/keys.txt`.
 - Medidor de latência do teclado nas configurações (aba Geral, Diagnóstico).
 
-## 1.2.0 — Dia a dia mais rápido (P a M) (pronto para lançar)
+## 1.2.0 — Dia a dia mais rápido (P a M) (feito)
 
 Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando", para dar para conferir.
 
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
-| **M1. Atualização dentro do app** | Botão "Atualizar", verificação SHA-256, `SHA256SUMS` na release | P | Código pronto e commitado; falta provar de ponta a ponta (M6) |
-| **M2. Autocompletar e histórico inteligente** | Ranking por frequência, recência e pasta; busca no histórico (`Ctrl+R`); mais comandos com sugestão de opções | M | Feito (falta conferir na tela) |
+| **M1. Atualização dentro do app** | Botão "Atualizar", verificação SHA-256, `SHA256SUMS` na release | P | Feito; provado de 1.2.2 para 1.2.3 no `.deb` (AppImage ainda sem teste) |
+| **M2. Autocompletar e histórico inteligente** | Ranking por frequência, recência e pasta; busca no histórico (`Ctrl+R`); mais comandos com sugestão de opções | M | Feito |
 | **M3. Notas executáveis mais ricas** | Variáveis, "Rodar todos" em sequência, saída guardada na nota | M | Feito |
 | **M4. Latência comparada** | Método repetível, medição em outros terminais, tabela e script no repositório | P a M | Método e script prontos; comparação justa com terminais de GPU em aberto (ver `docs/latencia.md`) |
 | **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | Pacotes prontos no workflow; falta testar em Fedora e Flatpak reais |
-| **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Por último |
+| **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Feito (1.2.0 a 1.2.3); falta a captura de tela nova no README |
 
 ### M1. Atualização dentro do app
 - Já está: botão na barra superior e nas configurações, AppImage troca o próprio arquivo, `.deb` instala com `pkexec apt-get`, soma conferida, cópia compilada só avisa.
