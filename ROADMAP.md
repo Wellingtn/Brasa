@@ -12,7 +12,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 - Atalhos configuráveis: clique no atalho nas configurações e aperte o novo; ficam em `~/.config/brasa/keys.txt`.
 - Medidor de latência do teclado nas configurações (aba Geral, Diagnóstico).
 
-## 1.2.0 — Dia a dia mais rápido (P a M)
+## 1.2.0 — Dia a dia mais rápido (P a M) (pronto para lançar)
 
 Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando", para dar para conferir.
 
