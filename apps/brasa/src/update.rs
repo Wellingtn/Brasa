@@ -126,7 +126,8 @@ fn dpkg_owns_brasa() -> bool {
 
 /// Endereço do arquivo de `assets` cujo nome termina com `suffix`; só aceita endereços do repositório.
 fn asset(assets: &[String], suffix: &str) -> Option<String> {
-    assets.iter().find(|u| u.starts_with(DOWNLOAD_PREFIX) && u.ends_with(suffix)).cloned()
+    // o GitHub devolve o nome do repositório como foi criado (Brasa), e o prefixo aqui está em minúsculas
+    assets.iter().find(|u| u.to_ascii_lowercase().starts_with(&DOWNLOAD_PREFIX.to_ascii_lowercase()) && u.ends_with(suffix)).cloned()
 }
 
 fn download(url: &str, dest: &Path) -> Result<(), String> {
@@ -205,6 +206,16 @@ pub fn install(kind: &InstallKind, assets: &[String], progress: &dyn Fn(&str)) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn asset_accepts_repo_name_in_any_case() {
+        let urls = vec![
+            "https://github.com/Wellingtn/Brasa/releases/download/v1.2.1/brasa_1.2.1-1_amd64.deb".to_string(),
+            "https://evil.example/Wellingtn/brasa/releases/download/v1/x.deb".to_string(),
+        ];
+        assert_eq!(asset(&urls, ".deb").as_deref(), Some(urls[0].as_str()));
+        assert_eq!(asset(&urls[1..], ".deb"), None);
+    }
 
     #[test]
     fn versions_compare_by_number() {

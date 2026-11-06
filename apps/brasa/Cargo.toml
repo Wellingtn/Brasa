@@ -20,6 +20,7 @@ ox-editor = { path = "../../crates/ox-editor" }
 tempfile.workspace = true
 
 [package.metadata.deb]
+maintainer = "Wellingtn <noreply@github.com>"
 name = "brasa"
 section = "utils"
 priority = "optional"
