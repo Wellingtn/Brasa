@@ -7,6 +7,7 @@ mod files_pane;
 mod folders;
 mod gsearch;
 mod histsearch;
+mod ssh;
 mod icons;
 mod keys;
 mod note_editor;
@@ -343,6 +344,7 @@ pub struct Workspace {
     /// histórico de comandos (do shell e do Brasa), usado nas sugestões e na busca do Ctrl+R
     pub history: SharedHistory,
     pub hist: Option<histsearch::HistSearch>,
+    pub ssh: Option<ssh::SshPicker>,
     /// notas executáveis: pergunta de variáveis, execução em andamento, aviso do resultado e últimos valores
     pub var_prompt: Option<noterun::VarPrompt>,
     pub note_run: Option<noterun::NoteRun>,
@@ -692,6 +694,7 @@ impl Workspace {
             engine: Engine::with_history(history.clone()),
             history,
             hist: None,
+            ssh: None,
             var_prompt: None,
             note_run: None,
             run_notice: None,
@@ -1079,6 +1082,13 @@ impl Workspace {
                     self.open_hist_search();
                 }
             }
+            SshConnect => {
+                if self.ssh.is_some() {
+                    self.ssh = None;
+                } else {
+                    self.open_ssh_picker();
+                }
+            }
             GlobalSearch => {
                 self.gsearch_focused = true;
                 self.filter_focused = false;
@@ -1151,6 +1161,10 @@ impl Workspace {
         }
 
         if self.hist.is_some() && self.on_hist_key(k, cx) {
+            return;
+        }
+
+        if self.ssh.is_some() && self.on_ssh_key(k, cx) {
             return;
         }
 
@@ -2066,6 +2080,7 @@ impl Render for Workspace {
             .children(if maximized { Vec::new() } else { self.resize_handles(cx) })
             .when_some(self.render_block_menu(cx), |d, m| d.child(m))
             .when_some(self.render_hist_search(cx), |d, m| d.child(m))
+            .when_some(self.render_ssh_picker(cx), |d, m| d.child(m))
             .when_some(self.render_var_prompt(cx), |d, m| d.child(m))
     }
 }

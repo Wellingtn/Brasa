@@ -31,6 +31,7 @@ pub enum Action {
     Settings,
     GlobalSearch,
     HistorySearch,
+    SshConnect,
 }
 
 /// (ação, nome no arquivo, descrição, atalhos de fábrica)
@@ -52,6 +53,7 @@ pub const ACTIONS: &[(Action, &str, &str, &[&str])] = &[
     (Action::ZoomOut, "zoom-menos", "Diminuir a fonte", &["ctrl+-"]),
     (Action::ZoomReset, "zoom-padrao", "Tamanho padrão da fonte", &["ctrl+0"]),
     (Action::HistorySearch, "historico", "Buscar no histórico de comandos", &["ctrl+r"]),
+    (Action::SshConnect, "ssh", "Conectar por SSH", &["ctrl+shift+h"]),
     (Action::GlobalSearch, "busca-global", "Buscar em notas e sessões", &["ctrl+k"]),
     (Action::Settings, "configuracoes", "Abrir as configurações", &["ctrl+,"]),
 ];

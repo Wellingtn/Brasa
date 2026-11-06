@@ -20,6 +20,7 @@
 - **Cada comando é um bloco.** Você vê o que rodou, quanto tempo levou, se deu certo, e copia só a saída de que precisa.
 - **Notas que executam.** Escreva em Markdown e rode um bloco de código direto no terminal. Use `{{variaveis}}` nos comandos (o Brasa pergunta os valores), rode todos os blocos em sequência (para no primeiro que falhar) e veja a saída da última execução guardada na própria nota.
 - **Busca de verdade.** A caixa no topo (`Ctrl+K`) procura de uma vez em notas, pelo nome e pelo texto, e em sessões, pelo nome e pelo que apareceu na saída.
+- **SSH em um atalho.** `Ctrl+Shift+H` (ou o botão SSH da barra lateral) lista os hosts do `~/.ssh/config`; Enter abre uma sessão já conectada e com o nome do host. Também aceita `usuario@maquina` digitado.
 - **Histórico que aprende.** As sugestões ao digitar pesam o que você mais usa, o que usou há pouco e o que rodou na pasta atual. `Ctrl+R` abre a busca no histórico. Sugere subcomandos e opções de git, cargo, docker, apt e systemctl, e as máquinas do ssh.
 - **Sessões organizadas.** Dê nome aos terminais, agrupe em pastas e divida a tela lado a lado.
 - **Arquivos e desempenho ao lado.** Gerenciador de arquivos com tamanho das pastas, permissões e visualizador de imagens, e monitor de CPU, memória e processos.
@@ -102,6 +103,7 @@ As escolhas valem na hora e ficam em `~/.config/brasa`.
 | Buscar na saída | `Ctrl+Shift+F` |
 | Buscar em notas e sessões | `Ctrl+K` |
 | Buscar no histórico de comandos | `Ctrl+R` |
+| Conectar por SSH | `Ctrl+Shift+H` |
 | Zoom | `Ctrl+=` / `Ctrl+-` |
 
 ## Desempenho

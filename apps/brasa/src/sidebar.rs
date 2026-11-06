@@ -287,6 +287,10 @@ impl Workspace {
                     this.new_tab(Some(cwd));
                     cx.notify();
                 })))
+                .child(outline_btn("term-ssh", "terminal", "SSH", c_coral()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.open_ssh_picker();
+                    cx.notify();
+                })))
                 .child(outline_btn("term-add-folder", "folder-closed", "Nova Pasta", c_coral()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.start_session_folder();
                     cx.notify();

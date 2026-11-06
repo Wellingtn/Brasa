@@ -521,6 +521,89 @@ impl SuggestionProvider for SpecProvider {
 
 // ---------- Máquinas do ssh ----------
 
+// ---------- Hosts SSH ----------
+
+/// Um destino do `~/.ssh/config`: o apelido (`Host`) e o que o arquivo diz dele.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshHost {
+    pub alias: String,
+    pub hostname: Option<String>,
+    pub user: Option<String>,
+    pub port: Option<u16>,
+}
+
+impl SshHost {
+    /// "usuario@maquina:porta", só com o que o arquivo informa; vazio se não diz nada.
+    pub fn detail(&self) -> String {
+        let mut out = String::new();
+        if let Some(u) = &self.user {
+            out.push_str(u);
+            out.push('@');
+        }
+        if let Some(h) = &self.hostname {
+            out.push_str(h);
+        }
+        if let Some(p) = self.port {
+            out.push_str(&format!(":{p}"));
+        }
+        out
+    }
+}
+
+/// Lê os blocos `Host` de um `ssh_config`. Apelidos com `*`, `?` ou `!` (padrões) são ignorados; `HostName`,
+/// `User` e `Port` valem para os apelidos do bloco em que aparecem; `Match` encerra o bloco.
+pub fn parse_ssh_config(text: &str) -> Vec<SshHost> {
+    let mut hosts: Vec<SshHost> = Vec::new();
+    let mut current: Vec<usize> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = match line.split_once(|c: char| c.is_whitespace() || c == '=') {
+            Some((k, v)) => (k.to_ascii_lowercase(), v.trim_start_matches(|c: char| c.is_whitespace() || c == '=').trim().trim_matches('"')),
+            None => continue,
+        };
+        match key.as_str() {
+            "host" => {
+                current.clear();
+                for alias in value.split_whitespace().filter(|a| !a.contains(['*', '?', '!'])) {
+                    if let Some(i) = hosts.iter().position(|h| h.alias == alias) {
+                        current.push(i);
+                    } else {
+                        hosts.push(SshHost { alias: alias.to_string(), hostname: None, user: None, port: None });
+                        current.push(hosts.len() - 1);
+                    }
+                }
+            }
+            "match" => current.clear(),
+            "hostname" | "user" | "port" => {
+                for &i in &current {
+                    let h = &mut hosts[i];
+                    match key.as_str() {
+                        "hostname" if h.hostname.is_none() => h.hostname = Some(value.to_string()),
+                        "user" if h.user.is_none() => h.user = Some(value.to_string()),
+                        "port" if h.port.is_none() => h.port = value.parse().ok(),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    hosts
+}
+
+/// Destino que o Brasa aceita digitar à mão: `maquina` ou `usuario@maquina`, sem espaço nem aspas, e sem
+/// começar com `-` (que o `ssh` leria como opção).
+pub fn valid_ssh_target(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && !s.starts_with('-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@' | ':' | '%' | '[' | ']'))
+        && s.matches('@').count() <= 1
+}
+
 /// Completa o destino de `ssh` com os `Host` do `~/.ssh/config` e os nomes do `~/.ssh/known_hosts`.
 pub struct SshProvider {
     hosts: Vec<String>,
@@ -641,6 +724,31 @@ impl SuggestionProvider for PathProvider {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_config_is_parsed_per_block() {
+        let cfg = "# meus servidores\nHost web db\n  HostName 10.0.0.5\n  User deploy\n  Port 2222\n\nHost *\n  User ninguem\n\nHost casa\n  HostName=casa.exemplo.com\nMatch host x\n  User escapou\nHost web\n  User outro\n";
+        let h = parse_ssh_config(cfg);
+        let aliases: Vec<_> = h.iter().map(|x| x.alias.as_str()).collect();
+        assert_eq!(aliases, ["web", "db", "casa"]);
+        assert_eq!(h[0].detail(), "deploy@10.0.0.5:2222");
+        assert_eq!(h[1].detail(), "deploy@10.0.0.5:2222");
+        assert_eq!(h[2].detail(), "casa.exemplo.com");
+        assert_eq!(h[2].user, None);
+        assert_eq!(h[0].user.as_deref(), Some("deploy")); // o primeiro valor vale, como no ssh
+    }
+
+    #[test]
+    fn typed_ssh_targets_are_checked() {
+        assert!(valid_ssh_target("servidor"));
+        assert!(valid_ssh_target("ana@10.0.0.1"));
+        assert!(valid_ssh_target("host.exemplo.com"));
+        assert!(!valid_ssh_target(""));
+        assert!(!valid_ssh_target("-oProxyCommand=x"));
+        assert!(!valid_ssh_target("a b"));
+        assert!(!valid_ssh_target("a;rm -rf"));
+        assert!(!valid_ssh_target("a@b@c"));
+    }
+
     use super::*;
 
     fn ctx<'a>(input: &'a str, cwd: &'a Path) -> Context<'a> {
