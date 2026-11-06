@@ -6,6 +6,7 @@ mod complete;
 mod files_pane;
 mod folders;
 mod gsearch;
+mod histsearch;
 mod icons;
 mod keys;
 mod note_editor;
@@ -37,7 +38,7 @@ use ox_files::{FileTree, Preview};
 use ox_markdown::{Block, NoteStore};
 use ox_pty::{PromptConfig, PtyEvents, PtyManager, SessionId, SpawnConfig};
 use panes::{Node, PaneKind, Rect};
-use ox_suggest::{Context as SuggestContext, Engine, Suggestion};
+use ox_suggest::{Context as SuggestContext, Engine, History, SharedHistory, Suggestion};
 use terminal::{key_bytes, mouse_report, Match, TermView};
 use theme::*;
 
@@ -338,6 +339,9 @@ pub struct Workspace {
     pub ed_cell_h: f32,
 
     engine: Engine,
+    /// histórico de comandos (do shell e do Brasa), usado nas sugestões e na busca do Ctrl+R
+    pub history: SharedHistory,
+    pub hist: Option<histsearch::HistSearch>,
     pub line: String,
     pub suggestions: Vec<Suggestion>,
     pub search: Option<Search>,
@@ -624,6 +628,7 @@ impl Workspace {
             let _ = notes.write("bem-vindo", WELCOME_NOTE);
         }
 
+        let history: SharedHistory = Arc::new(std::sync::RwLock::new(History::load(&Self::history_log_path())));
         let mut ws = Self {
             focus,
             mono,
@@ -676,7 +681,9 @@ impl Workspace {
             vh: 900.0,
             ed_cell_w: ed_cell.0,
             ed_cell_h: (ED_FONT * 1.5).round(),
-            engine: Engine::with_defaults(),
+            engine: Engine::with_history(history.clone()),
+            history,
+            hist: None,
             line: String::new(),
             suggestions: Vec::new(),
             search: None,
@@ -1045,6 +1052,13 @@ impl Workspace {
             ZoomOut => self.set_font_size(self.font_size - 1.0, window),
             ZoomReset => self.set_font_size(DEFAULT_FONT, window),
             Settings => self.show_settings = !self.show_settings,
+            HistorySearch => {
+                if self.hist.is_some() {
+                    self.hist = None;
+                } else {
+                    self.open_hist_search();
+                }
+            }
             GlobalSearch => {
                 self.gsearch_focused = true;
                 self.filter_focused = false;
@@ -1112,6 +1126,10 @@ impl Workspace {
             return;
         }
 
+        if self.hist.is_some() && self.on_hist_key(k, cx) {
+            return;
+        }
+
         if self.gsearch_focused && self.on_gsearch_key(k, cx) {
             return;
         }
@@ -1150,7 +1168,8 @@ impl Workspace {
             return;
         }
 
-        let action = self.keymap.lookup(k);
+        // Ctrl+R abre a busca no histórico, menos num programa de tela cheia (vim, htop), onde a tecla é dele
+        let action = self.keymap.lookup(k).filter(|a| *a != keys::Action::HistorySearch || !self.tabs[self.active].term.is_alt_screen());
         if self.search.is_some() && action != Some(keys::Action::Search) {
             self.on_search_key(k, cx);
             return;
@@ -1193,6 +1212,7 @@ impl Workspace {
             self.tab().cmd_starts.push_back(std::time::Instant::now());
             if !self.line.trim().is_empty() {
                 let cmd = self.line.trim().to_string();
+                self.record_command(&self.line.clone());
                 self.tab().last_cmd = cmd;
             }
         }
@@ -2017,6 +2037,7 @@ impl Render for Workspace {
             )
             .children(if maximized { Vec::new() } else { self.resize_handles(cx) })
             .when_some(self.render_block_menu(cx), |d, m| d.child(m))
+            .when_some(self.render_hist_search(cx), |d, m| d.child(m))
     }
 }
 
