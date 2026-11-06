@@ -206,8 +206,12 @@ pub fn fish_init(p: &PromptConfig) -> String {
 
 /// Pasta por usuário (0700 em XDG_RUNTIME_DIR; senão ~/.cache) para os arquivos de integração.
 fn integration_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
+    // no Flatpak só esta pasta aparece igual para a caixa e para o computador
+    let shared = std::env::var_os("FLATPAK_ID")
+        .filter(|_| in_flatpak())
+        .and_then(|id| std::env::var_os("XDG_RUNTIME_DIR").map(|r| PathBuf::from(r).join("app").join(id)));
+    let base = shared
+        .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from))
         .or_else(|| dirs_home().map(|h| h.join(".cache")))?;
     let dir = base.join("brasa");
     std::fs::create_dir_all(&dir).ok()?;
@@ -244,8 +248,42 @@ fn apply_prompt(cmd: &mut CommandBuilder, shell: &str, p: &PromptConfig) {
     }
 }
 
+/// Dentro de um Flatpak o terminal precisa abrir o shell do computador, não o da caixa.
+pub fn in_flatpak() -> bool {
+    cfg!(unix) && Path::new("/.flatpak-info").exists()
+}
+
+/// Troca o comando por `flatpak-spawn --host ...`, levando junto pasta e variáveis.
+fn host_wrapped(argv: &[std::ffi::OsString], cwd: Option<&std::ffi::OsStr>, envs: &[(String, String)]) -> Vec<std::ffi::OsString> {
+    let mut out: Vec<std::ffi::OsString> = vec!["flatpak-spawn".into(), "--host".into(), "--watch-bus".into()];
+    if let Some(c) = cwd {
+        let mut a = std::ffi::OsString::from("--directory=");
+        a.push(c);
+        out.push(a);
+    }
+    for (k, v) in envs {
+        out.push(format!("--env={k}={v}").into());
+    }
+    out.push("--".into());
+    out.extend(argv.iter().cloned());
+    out
+}
+
+fn host_shell() -> String {
+    std::process::Command::new("flatpak-spawn")
+        .args(["--host", "printenv", "SHELL"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| s.starts_with('/'))
+        .unwrap_or_else(|| "/bin/bash".into())
+}
+
 pub fn default_shell() -> String {
-    if cfg!(windows) {
+    if in_flatpak() {
+        host_shell()
+    } else if cfg!(windows) {
         std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".into())
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
@@ -286,6 +324,11 @@ impl PtyManager {
             cmd.cwd(cwd);
         }
 
+        if in_flatpak() {
+            let envs: Vec<(String, String)> = cmd.iter_extra_env_as_str().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let wrapped = host_wrapped(cmd.get_argv(), cmd.get_cwd().map(|c| c.as_os_str()), &envs);
+            cmd = CommandBuilder::from_argv(wrapped);
+        }
         let child = pair.slave.spawn_command(cmd).map_err(pty_err)?;
         let pid = child.process_id();
         drop(pair.slave); // sem isso o leitor nunca recebe EOF
@@ -363,6 +406,15 @@ fn dirs_home() -> Option<PathBuf> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_wrapped_leva_pasta_e_variaveis() {
+        let argv = vec!["/bin/bash".into(), "--rcfile".into(), "/run/x".into()];
+        let w = host_wrapped(&argv, Some(std::ffi::OsStr::new("/home/u")), &[("TERM".into(), "xterm-256color".into())]);
+        let w: Vec<String> = w.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(w, ["flatpak-spawn", "--host", "--watch-bus", "--directory=/home/u", "--env=TERM=xterm-256color", "--", "/bin/bash", "--rcfile", "/run/x"]);
+    }
+
     use std::sync::mpsc;
     use std::time::Duration;
 

@@ -22,7 +22,7 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 | **M2. Autocompletar e histórico inteligente** | Ranking por frequência, recência e pasta; busca no histórico (`Ctrl+R`); mais comandos com sugestão de opções | M | Feito (falta conferir na tela) |
 | **M3. Notas executáveis mais ricas** | Variáveis, "Rodar todos" em sequência, saída guardada na nota | M | Feito |
 | **M4. Latência comparada** | Método repetível, medição em outros terminais, tabela e script no repositório | P a M | Método e script prontos; comparação justa com terminais de GPU em aberto (ver `docs/latencia.md`) |
-| **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | A fazer |
+| **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | Pacotes prontos no workflow; falta testar em Fedora e Flatpak reais |
 | **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Por último |
 
 ### M1. Atualização dentro do app

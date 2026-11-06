@@ -34,3 +34,18 @@ assets = [
     ["../../branding/icons/brasa-256.png", "usr/share/icons/hicolor/256x256/apps/brasa.png", "644"],
     ["../../branding/icons/brasa-512.png", "usr/share/icons/hicolor/512x512/apps/brasa.png", "644"],
 ]
+
+[package.metadata.generate-rpm]
+name = "brasa"
+summary = "Terminal em blocos com notas executáveis"
+assets = [
+    { source = "../../target/release/brasa", dest = "/usr/bin/brasa", mode = "755" },
+    { source = "../../packaging/brasa.desktop", dest = "/usr/share/applications/brasa.desktop", mode = "644" },
+    { source = "../../branding/icons/brasa-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/brasa.png", mode = "644" },
+    { source = "../../branding/icons/brasa-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/brasa.png", mode = "644" },
+    { source = "../../branding/icons/brasa-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/brasa.png", mode = "644" },
+    { source = "../../branding/icons/brasa-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/brasa.png", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+vulkan-loader = "*"

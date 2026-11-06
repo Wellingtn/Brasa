@@ -38,6 +38,20 @@ Baixe o instalador da versão mais recente na página de [Releases](https://gith
 sudo apt install ./brasa_*.deb
 ```
 
+**.rpm** (Fedora e derivados):
+
+```bash
+sudo dnf install ./brasa-*.rpm
+```
+
+**Flatpak** (qualquer distribuição com Flatpak):
+
+```bash
+flatpak install --user ./Brasa-*-x86_64.flatpak
+```
+
+Esses dois se atualizam pelo gerenciador do sistema; o botão "Atualizar" do app só aparece no AppImage e no .deb.
+
 **AppImage** (outras distribuições):
 
 ```bash

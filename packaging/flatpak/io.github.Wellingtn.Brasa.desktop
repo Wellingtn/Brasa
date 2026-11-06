@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Brasa
+Comment=Terminal em blocos com notas executáveis
+Exec=brasa
+Icon=io.github.Wellingtn.Brasa
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;
+StartupWMClass=brasa

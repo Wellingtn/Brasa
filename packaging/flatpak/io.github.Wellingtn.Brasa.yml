@@ -1,0 +1,34 @@
+# Pacote Flatpak do Brasa. Usa o binário já compilado pelo workflow (target/release/brasa).
+# Para montar à mão: cargo build -p brasa --release && flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.Wellingtn.Brasa.yml
+app-id: io.github.Wellingtn.Brasa
+runtime: org.freedesktop.Platform
+runtime-version: "24.08"
+sdk: org.freedesktop.Sdk
+command: brasa
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  - --share=network
+  # arquivos e notas do usuário
+  - --filesystem=home
+  # o terminal abre o shell do computador por flatpak-spawn --host
+  - --talk-name=org.freedesktop.Flatpak
+modules:
+  - name: brasa
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 brasa /app/bin/brasa
+      - install -Dm644 io.github.Wellingtn.Brasa.desktop /app/share/applications/io.github.Wellingtn.Brasa.desktop
+      - install -Dm644 brasa-256.png /app/share/icons/hicolor/256x256/apps/io.github.Wellingtn.Brasa.png
+      - install -Dm644 brasa-512.png /app/share/icons/hicolor/512x512/apps/io.github.Wellingtn.Brasa.png
+    sources:
+      - type: file
+        path: ../../target/release/brasa
+      - type: file
+        path: io.github.Wellingtn.Brasa.desktop
+      - type: file
+        path: ../../branding/icons/brasa-256.png
+      - type: file
+        path: ../../branding/icons/brasa-512.png

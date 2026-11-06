@@ -113,10 +113,15 @@ fn kind_for(appimage_env: Option<&str>, exe: Option<&Path>) -> InstallKind {
     if let Some(p) = appimage_env.filter(|p| !p.is_empty() && Path::new(p).is_file()) {
         return InstallKind::AppImage(PathBuf::from(p));
     }
+    // /usr sozinho não basta: um .rpm também instala lá e se atualiza pelo dnf, não por nós
     match exe {
-        Some(e) if e.starts_with("/usr/") => InstallKind::Deb,
+        Some(e) if e.starts_with("/usr/") && dpkg_owns_brasa() => InstallKind::Deb,
         _ => InstallKind::Source,
     }
+}
+
+fn dpkg_owns_brasa() -> bool {
+    Path::new("/var/lib/dpkg/info/brasa.list").is_file()
 }
 
 /// Endereço do arquivo de `assets` cujo nome termina com `suffix`; só aceita endereços do repositório.
@@ -235,7 +240,10 @@ mod tests {
 
     #[test]
     fn install_kind_is_detected() {
-        assert_eq!(kind_for(None, Some(Path::new("/usr/bin/brasa"))), InstallKind::Deb);
+        // sem o registro do dpkg (rpm, Flatpak) não há atualização própria
+        let usr = kind_for(None, Some(Path::new("/usr/bin/brasa")));
+        assert_eq!(usr == InstallKind::Deb, dpkg_owns_brasa());
+        assert_eq!(kind_for(None, Some(Path::new("/app/bin/brasa"))), InstallKind::Source);
         assert_eq!(kind_for(None, Some(Path::new("/home/x/Projetos/brasa/target/release/brasa"))), InstallKind::Source);
         assert_eq!(kind_for(Some("/nao/existe.AppImage"), Some(Path::new("/tmp/.mount_x/usr/bin/brasa"))), InstallKind::Source);
         let me = std::env::current_exe().unwrap();
