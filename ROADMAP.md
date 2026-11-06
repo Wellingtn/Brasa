@@ -82,10 +82,25 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 - Publicar depois uma versão seguinte pequena (1.2.1) só para provar a atualização dentro do app.
 - Pronto quando: a atualização de 1.2.0 para 1.2.1 funciona no AppImage e no `.deb`.
 
-## 1.3.0 — Terminal completo (M)
-- Protocolo de imagens Kitty (e Sixel, se sobrar tempo).
-- SSH integrado: abrir uma sessão remota como uma sessão normal do Brasa.
-- Mais vazão com saída enorme (tirar análise e desenho da thread da interface).
+## 1.3.0 — Terminal completo (M a G)
+
+Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (já está em cerca de 60 MB/s, 3º de 9 no comparativo); só volta se você pedir.
+
+| Marco | O que entra | Esforço | Situação |
+|---|---|---|---|
+| **M1. SSH integrado** | Abrir uma sessão remota como sessão normal: lista de hosts do `~/.ssh/config`, atalho para abrir, blocos e sugestões funcionando no remoto | M | A fazer |
+| **M2. Imagens no terminal (Kitty)** | Protocolo gráfico do Kitty (`kitty +kitten icat`, `chafa`, visualizadores): decodificar e desenhar imagens dentro do bloco | G | A fazer |
+| **M3. Sixel (opcional)** | Segundo protocolo de imagem, reaproveitando o desenho do M2 | M | Só se sobrar tempo |
+| **M4. Lançamento 1.3.0** | Versão, README, captura de tela sem dados pessoais, tag, release conferida, teste da atualização no AppImage | P | Por último |
+
+### M1. SSH integrado
+- Ler `~/.ssh/config` e listar os hosts; "Novo terminal SSH" na barra lateral e no `Ctrl+K`.
+- A sessão remota se comporta como as outras (blocos, histórico por host); a sugestão de `ssh` já existe no `ox-suggest`.
+- Pronto quando: abre uma sessão num host de teste (um servidor SSH local no contêiner), roda comandos e fecha sem deixar processo órfão; nome do host aparece na sessão.
+
+### M2. Imagens no terminal (Kitty)
+- Interpretar as sequências do protocolo gráfico do Kitty (transmitir, mostrar, apagar) e desenhar a imagem no bloco.
+- Pronto quando: `kitty +kitten icat foto.png` e `chafa -f kitty` mostram a imagem no lugar certo, rolam com o texto e somem ao limpar; imagem inválida ou enorme não trava o app (limite de tamanho).
 
 ## 1.4.0 — MCP (M a G)
 - Conectar servidores MCP e mostrar as ferramentas deles.
