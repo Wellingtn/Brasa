@@ -24,9 +24,9 @@ fn separators(screen: &[RowView]) -> Vec<(Option<u32>, Option<u32>)> {
     let last_prompt = screen.iter().rposition(|r| matches!(r, RowView::Prompt(_)));
     (0..screen.len())
         .map(|i| {
-            let top = (i > 0 && is_prompt(screen.get(i))).then_some(if Some(i) == last_prompt { SEP_ACTIVE } else { SEP });
+            let top = (i > 0 && is_prompt(screen.get(i))).then_some(if Some(i) == last_prompt { c_sep_active() } else { c_sep() });
             let is_command_row = i > 0 && is_prompt(screen.get(i - 1)) && !is_prompt(screen.get(i));
-            let bottom = (is_command_row && has_text(screen.get(i + 1))).then_some(SEP);
+            let bottom = (is_command_row && has_text(screen.get(i + 1))).then_some(c_sep());
             (top, bottom)
         })
         .collect()
@@ -53,9 +53,9 @@ impl Workspace {
             .h(px(self.cell_h - 3.))
             .px(px(8.))
             .rounded_md()
-            .bg(rgb(SURFACE))
+            .bg(rgb(c_surface()))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(c_border()))
             .text_size(px(size))
             .font_weight(FontWeight::SEMIBOLD)
             .child(icon_el(&self.icon_font, &ic, size))
@@ -93,14 +93,14 @@ impl Workspace {
                         .flex_row()
                         .items_center()
                         .gap(px(8.))
-                        .when_some(info.venv, |d, v| d.child(self.chip(TERMINAL, "›_", ACCENT, v, TEXT)))
-                        .child(self.chip(FOLDER, "▣", 0x7aa2f7, info.path, TEXT))
+                        .when_some(info.venv, |d, v| d.child(self.chip(TERMINAL, "›_", c_accent(), v, c_text())))
+                        .child(self.chip(FOLDER, "▣", 0x7aa2f7, info.path, c_text()))
                         .when_some(info.branch, |d, b| d.child(self.chip(BRANCH, "⎇", GREEN, b, GREEN))),
                     RowView::Cells(runs) => div().flex().flex_row().whitespace_nowrap().children(runs.into_iter().map(|r| {
                         div()
                             .flex_none()
                             .text_color(rgb(r.fg))
-                            .when(r.bg != TERM_BG, |d| d.bg(rgb(r.bg)))
+                            .when(r.bg != c_term_bg(), |d| d.bg(rgb(r.bg)))
                             .when(r.bold, |d| d.font_weight(FontWeight::BOLD))
                             .when(r.underline, |d| d.underline())
                             .child(r.text)
@@ -126,26 +126,26 @@ impl Workspace {
                 format!("{}/{}", s.current + 1, s.matches.len())
             };
             left = left
-                .child(div().text_color(rgb(ACCENT)).child("buscar ›"))
+                .child(div().text_color(rgb(c_accent())).child("buscar ›"))
                 .child(div().font_family(self.mono.clone()).child(format!("{}▏", s.query)))
                 .child(div().text_color(rgb(YELLOW)).child(count))
-                .child(div().text_color(rgb(MUTED)).child("enter: acima · shift-enter: abaixo · esc: fechar"));
+                .child(div().text_color(rgb(c_muted())).child("enter: acima · shift-enter: abaixo · esc: fechar"));
         } else if let Some((first, rest)) = self.suggestions.split_first() {
             let ghost = first.ghost(&self.line).to_string();
             left = left
-                .child(div().text_color(rgb(ACCENT)).child(format!("{} ›", first.source)))
+                .child(div().text_color(rgb(c_accent())).child(format!("{} ›", first.source)))
                 .child(div().flex_none().font_family(self.mono.clone()).child(self.line.clone()))
-                .child(div().flex_none().font_family(self.mono.clone()).text_color(rgb(MUTED)).child(ghost))
-                .child(div().flex_none().text_color(rgb(MUTED)).child(first.description.clone().map_or("· → aceitar".into(), |d| format!("· {d} · → aceitar"))));
+                .child(div().flex_none().font_family(self.mono.clone()).text_color(rgb(c_muted())).child(ghost))
+                .child(div().flex_none().text_color(rgb(c_muted())).child(first.description.clone().map_or("· → aceitar".into(), |d| format!("· {d} · → aceitar"))));
             for s in rest {
-                left = left.child(div().flex_none().font_family(self.mono.clone()).text_color(rgb(MUTED)).child(format!("· {}", s.text)));
+                left = left.child(div().flex_none().font_family(self.mono.clone()).text_color(rgb(c_muted())).child(format!("· {}", s.text)));
             }
         } else {
             left = left.child(
                 div()
                     .font_family(self.mono.clone())
                     .text_size(px(12.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(c_muted()))
                     .whitespace_nowrap()
                     .child(fit_hints(
                         &["ctrl-shift-t novo terminal", "ctrl-shift-f buscar", "ctrl-shift-n notas", "ctrl-shift-e barra lateral"],
@@ -161,7 +161,7 @@ impl Workspace {
             .items_center()
             .gap_3()
             .text_xs()
-            .text_color(rgb(MUTED))
+            .text_color(rgb(c_muted()))
             .when(self.prompt_text.is_none(), |d| {
                 d.when_some(self.git.clone(), |d, b| d.child(div().text_color(rgb(GREEN)).child(format!("⎇ {b}"))))
                     .child(shorten(&self.shell_cwd))
@@ -183,10 +183,10 @@ impl Workspace {
                     .min_h_0()
                     .p(px(TERM_PAD))
                     .overflow_hidden()
-                    .bg(rgb(TERM_BG))
+                    .bg(rgb(c_term_bg()))
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(c_border()))
                     .font_family(self.mono.clone())
                     .text_size(px(self.font_size))
                     .line_height(h)
@@ -210,8 +210,8 @@ impl Workspace {
                                 .py_1()
                                 .rounded_md()
                                 .text_xs()
-                                .bg(rgb(ACCENT))
-                                .text_color(rgb(BG))
+                                .bg(rgb(c_accent()))
+                                .text_color(rgb(c_bg()))
                                 .cursor_pointer()
                                 .child(format!("↓ {offset} linhas acima · ir ao fim"))
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -249,10 +249,10 @@ mod tests {
         let sep = separators(&screen(&text));
         // linhas: 0 prompt1 | 1 comando "ls" | 2 saída | 3 prompt2 | 4 "true" | 5 prompt3 | 6 comando vazio
         assert_eq!(sep[0], (None, None), "primeira linha não tem linha acima");
-        assert_eq!(sep[1], (None, Some(SEP)), "comando com saída ganha linha embaixo");
-        assert_eq!(sep[3].0, Some(SEP), "prompt antigo: linha comum acima");
+        assert_eq!(sep[1], (None, Some(c_sep())), "comando com saída ganha linha embaixo");
+        assert_eq!(sep[3].0, Some(c_sep()), "prompt antigo: linha comum acima");
         assert_eq!(sep[4].1, None, "comando sem saída não ganha linha embaixo");
-        assert_eq!(sep[5].0, Some(SEP_ACTIVE), "prompt atual: linha destacada");
+        assert_eq!(sep[5].0, Some(c_sep_active()), "prompt atual: linha destacada");
         assert_eq!(sep[6], (None, None), "comando ainda vazio não tem linha embaixo");
     }
 

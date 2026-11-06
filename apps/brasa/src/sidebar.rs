@@ -26,8 +26,8 @@ fn list_row(id: impl Into<gpui::ElementId>, selected: bool) -> Stateful<Div> {
         .rounded_md()
         .cursor_pointer()
         .text_sm()
-        .when(selected, |d| d.bg(rgb(SURFACE)))
-        .when(!selected, |d| d.hover(|s| s.bg(rgb(HOVER))))
+        .when(selected, |d| d.bg(rgb(c_surface())))
+        .when(!selected, |d| d.hover(|s| s.bg(rgb(c_hover()))))
 }
 
 /// Botão pequeno de ícone (ou glifo) usado nos cabeçalhos de seção e nos controles da árvore.
@@ -43,9 +43,9 @@ fn tiny_btn(id: impl Into<gpui::ElementId>, label: &'static str) -> Stateful<Div
         .items_center()
         .justify_center()
         .text_xs()
-        .text_color(rgb(MUTED))
+        .text_color(rgb(c_muted()))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_HOVER)).text_color(rgb(TEXT)))
+        .hover(|s| s.bg(rgb(c_btn_hover())).text_color(rgb(c_text())))
         .child(label)
 }
 
@@ -61,11 +61,11 @@ fn outline_btn(id: &'static str, icon: &'static str, label: &'static str, color:
         .gap(px(6.))
         .rounded_md()
         .border_1()
-        .border_color(rgb(CARD_BORDER))
+        .border_color(rgb(c_card_border()))
         .text_size(px(13.))
-        .text_color(rgb(TEXT))
+        .text_color(rgb(c_text()))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(HOVER)).border_color(rgb(color)))
+        .hover(move |s| s.bg(rgb(c_hover())).border_color(rgb(color)))
         .child(wicon(icon, 13., color))
         .child(label)
 }
@@ -81,7 +81,7 @@ fn row_icon_btn(id: impl Into<gpui::ElementId>, icon: &'static str, color: u32) 
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_HOVER)))
+        .hover(|s| s.bg(rgb(c_btn_hover())))
         .child(wicon(icon, 14., color))
 }
 
@@ -92,14 +92,14 @@ fn name_input(text: &str, hint: &str) -> Div {
         .px_2()
         .py(px(3.))
         .rounded_md()
-        .bg(rgb(BG))
+        .bg(rgb(c_bg()))
         .border_1()
-        .border_color(rgb(ACCENT))
+        .border_color(rgb(c_accent()))
         .text_sm()
         .flex()
         // o filho ocupa a largura do campo; com `truncate` sem largura ele encolhia até virar "..."
         .child(if text.is_empty() {
-            div().flex_1().min_w_0().truncate().text_color(rgb(MUTED)).child(hint.to_string())
+            div().flex_1().min_w_0().truncate().text_color(rgb(c_muted())).child(hint.to_string())
         } else {
             div().flex_1().min_w_0().truncate().child(format!("{text}▏"))
         })
@@ -108,18 +108,20 @@ fn name_input(text: &str, hint: &str) -> Div {
 /// Rótulo, ícone, cor e fundo de cada seção da barra lateral.
 fn side_style(side: Side) -> (&'static str, &'static str, u32, u32) {
     match side {
-        Side::Terminals => ("Sessões", "terminal", CORAL, CORAL_DIM),
-        Side::Notes => ("Notas", "notebook", AMBER, AMBER_DIM),
+        Side::Terminals => ("Sessões", "terminal", c_coral(), c_coral_dim()),
+        Side::Notes => ("Notas", "notebook", c_amber(), c_amber_dim()),
     }
 }
 
 impl Workspace {
-    /// Força da brasa do logo: brasa baixa parada; com comando rodando, tremeluz em passos irregulares
-    /// (um a cada pulso do relógio do cursor), como brasa viva.
-    fn ember_glow(&self) -> f32 {
-        const FLICKER: [f32; 7] = [0.7, 1.0, 0.8, 0.95, 0.65, 0.9, 0.75];
+    /// Força da brasa do logo e do fio sob o cabeçalho: brasa baixa parada; com comando rodando, respira
+    /// devagar (uma onda suave de ~2,4 s, desenhada a cada quadro enquanto algo roda).
+    pub(crate) fn ember_glow(&self) -> f32 {
         if self.tabs.iter().any(|t| !t.cmd_starts.is_empty()) {
-            FLICKER[(self.tick % FLICKER.len() as u64) as usize]
+            static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let t = START.get_or_init(std::time::Instant::now).elapsed().as_secs_f32();
+            let wave = 0.5 - 0.5 * (t * std::f32::consts::TAU / 2.4).cos();
+            0.35 + 0.65 * wave
         } else {
             0.35
         }
@@ -139,10 +141,10 @@ impl Workspace {
             .flex_none()
             .flex()
             .flex_col()
-            .bg(rgba(PANEL_GLASS))
+            .bg(rgba(c_panel_glass()))
             .rounded_l(px(self.corner_r))
             .border_r_1()
-            .border_color(rgb(DIVIDER))
+            .border_color(rgb(c_divider()))
             // topo: arrasta a janela, como a barra de título
             .child(
                 div()
@@ -152,8 +154,8 @@ impl Workspace {
                     .items_center()
                     .pl_4()
                     .pr_2()
-                    .border_b_1()
-                    .border_color(rgb(DIVIDER))
+                    .border_b(px(2.))
+                    .border_color(rgb(c_divider()))
                     .child(
                         div()
                             .flex_1()
@@ -162,7 +164,7 @@ impl Workspace {
                             .items_center()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(c_muted()))
                             .window_control_area(WindowControlArea::Drag)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -176,7 +178,7 @@ impl Workspace {
                             )
                             // logo da Brasa (a chama com o prompt e o nome, branding/brasa-logo-dark.png); a brasa tremeluz enquanto um comando roda
                             .child(
-                                gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded("brand/brasa-logo.png".into())))
+                                gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded(logo_path().into())))
                                     .h(px(30.))
                                     .w(px(92.))
                                     .object_fit(gpui::ObjectFit::Contain)
@@ -192,8 +194,8 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(HOVER)))
-                            .child(wicon("layout-left", 15., MUTED))
+                            .hover(|s| s.bg(rgb(c_hover())))
+                            .child(wicon("layout-left", 15., c_muted()))
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.show_sidebar = false;
                                 cx.notify();
@@ -236,7 +238,7 @@ impl Workspace {
             .flex()
             .gap(px(2.))
             .rounded_lg()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .border_1()
             .border_color(rgb(dim))
             .children([Side::Terminals, Side::Notes].into_iter().map(|side| {
@@ -255,8 +257,8 @@ impl Workspace {
                     .text_size(px(13.))
                     .cursor_pointer()
                     .when(active, |d| d.bg(rgb(dim)).text_color(rgb(color)).font_weight(FontWeight::MEDIUM))
-                    .when(!active, |d| d.text_color(rgb(MUTED)).hover(|s| s.bg(rgb(HOVER)).text_color(rgb(TEXT))))
-                    .child(wicon(icon, 13., if active { color } else { MUTED }))
+                    .when(!active, |d| d.text_color(rgb(c_muted())).hover(|s| s.bg(rgb(c_hover())).text_color(rgb(c_text()))))
+                    .child(wicon(icon, 13., if active { color } else { c_muted() }))
                     .child(label)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if this.side != side {
@@ -280,12 +282,12 @@ impl Workspace {
                 .gap_2()
                 .px_1()
                 .pt_1()
-                .child(outline_btn("term-new", "terminal", "Novo Terminal", CORAL).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                .child(outline_btn("term-new", "terminal", "Novo Terminal", c_coral()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     let cwd = this.shell_cwd.clone();
                     this.new_tab(Some(cwd));
                     cx.notify();
                 })))
-                .child(outline_btn("term-add-folder", "folder-closed", "Nova Pasta", CORAL).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                .child(outline_btn("term-add-folder", "folder-closed", "Nova Pasta", c_coral()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.start_session_folder();
                     cx.notify();
                 })))
@@ -304,8 +306,8 @@ impl Workspace {
                 .rounded_md()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(MUTED))
-                .drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(CORAL_DIM)).text_color(rgb(TEXT)))
+                .text_color(rgb(c_muted()))
+                .drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(c_coral_dim())).text_color(rgb(c_text())))
                 .on_drop(cx.listener(|this, item: &DraggedSession, _, cx| {
                     this.move_session(item, None);
                     cx.notify();
@@ -313,26 +315,32 @@ impl Workspace {
                 .child("Todas as sessões")
                 .into_any_element(),
         );
-        if let Some(n) = self.naming.as_ref().filter(|n| n.sessions && n.rename.is_none()) {
+        if let Some(n) = self.naming.as_ref().filter(|n| n.sessions && n.rename.is_none() && n.terminal.is_none()) {
             body.push(name_input(&n.text, "Nome da pasta").mx_1().my_1().into_any_element());
         }
 
         let label_of = |i: usize, _t: &crate::Tab| self.terminal_label(i);
         if !filter.is_empty() {
-            // busca: lista plana, por comando ou pasta
-            let found: Vec<usize> = (0..self.tabs.len())
-                .filter(|&i| {
+            // busca: lista plana, por nome, comando ou pasta e também pelo que apareceu na saída do terminal
+            let found: Vec<(usize, usize)> = (0..self.tabs.len())
+                .filter_map(|i| {
                     let t = &self.tabs[i];
                     let in_folder = t.folder.and_then(|id| self.session_folders.iter().find(|f| f.id == id)).map(|f| f.name.to_lowercase()).unwrap_or_default();
-                    label_of(i, t).to_lowercase().contains(filter) || self.session_label(i).0.to_lowercase().contains(filter) || in_folder.contains(filter)
+                    let by_name = label_of(i, t).to_lowercase().contains(filter) || self.session_label(i).0.to_lowercase().contains(filter) || in_folder.contains(filter);
+                    let in_output = t.term.search(filter).len();
+                    (by_name || in_output > 0).then_some((i, in_output))
                 })
                 .collect();
             if found.is_empty() {
-                body.push(div().px_2().py_1().text_xs().text_color(rgb(MUTED)).child("Nenhuma sessão combina.").into_any_element());
+                body.push(div().px_2().py_1().text_xs().text_color(rgb(c_muted())).child("Nenhuma sessão combina.").into_any_element());
             }
-            for i in found {
+            for (i, in_output) in found {
                 let label = label_of(i, &self.tabs[i]);
                 body.push(self.session_row(i, label, 0, cx));
+                if in_output > 0 {
+                    let text = if in_output == 1 { "1 ocorrência na saída".to_string() } else { format!("{in_output} ocorrências na saída") };
+                    body.push(div().flex_none().pl(px(38.)).pb_1().text_xs().text_color(rgb(c_disabled())).child(text).into_any_element());
+                }
             }
             return;
         }
@@ -362,22 +370,22 @@ impl Workspace {
                     .child(icon_el(&font, &folder_icon(open), 14.))
                     .child(match renaming {
                         Some(text) => name_input(&text, "Nome da pasta").flex_1().into_any_element(),
-                        None => div().flex_1().min_w_0().truncate().when(selected, |d| d.text_color(rgb(CORAL))).child(name).into_any_element(),
+                        None => div().flex_1().min_w_0().truncate().when(selected, |d| d.text_color(rgb(c_coral()))).child(name).into_any_element(),
                     })
-                    .when(!open && !inside.is_empty(), |d| d.child(div().text_xs().text_color(rgb(DISABLED)).child(inside.len().to_string())))
+                    .when(!open && !inside.is_empty(), |d| d.child(div().text_xs().text_color(rgb(c_disabled())).child(inside.len().to_string())))
                     .when(selected && self.naming.is_none(), |d| {
-                        d.child(row_icon_btn(("sf-ren", k), "pencil-02", MUTED).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        d.child(row_icon_btn(("sf-ren", k), "pencil-02", c_muted()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
                             this.start_rename_session_folder(id);
                             cx.notify();
                         })))
-                        .child(row_icon_btn(("sf-x", k), "trash-02", MUTED).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        .child(row_icon_btn(("sf-x", k), "trash-02", c_muted()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
                             this.confirm_trash = Some(format!("sf:{id}"));
                             cx.notify();
                         })))
                     })
-                    .drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(CORAL_DIM)))
+                    .drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(c_coral_dim())))
                     .on_drop(cx.listener(move |this, item: &DraggedSession, _, cx| {
                         this.move_session(item, Some(id));
                         cx.notify();
@@ -397,7 +405,7 @@ impl Workspace {
             );
             if open {
                 if inside.is_empty() {
-                    body.push(div().pl(px(8. + INDENT + 22.)).py_1().text_xs().text_color(rgb(DISABLED)).child("Arraste um terminal para cá").into_any_element());
+                    body.push(div().pl(px(8. + INDENT + 22.)).py_1().text_xs().text_color(rgb(c_disabled())).child("Arraste um terminal para cá").into_any_element());
                 }
                 for i in inside {
                     let label = label_of(i, &self.tabs[i]);
@@ -423,15 +431,15 @@ impl Workspace {
         let renaming = self.naming.as_ref().filter(|n| n.terminal == Some(sid)).map(|n| n.text.clone());
         list_row(("term", i), active)
             .pl(px(8. + INDENT * depth as f32 + if depth > 0 { 6. } else { 0. }))
-            .child(wicon("terminal", 13., if running { CORAL } else if active { TEXT } else { DISABLED }))
+            .child(wicon("terminal", 13., if running { c_coral() } else if active { c_text() } else { c_disabled() }))
             .child(match renaming {
                 Some(text) => name_input(&text, "Nome do terminal").flex_1().into_any_element(),
-                None => div().flex_1().min_w_0().truncate().when(!active, |d| d.text_color(rgb(MUTED))).child(label).into_any_element(),
+                None => div().flex_1().min_w_0().truncate().when(!active, |d| d.text_color(rgb(c_muted()))).child(label).into_any_element(),
             })
-            .child(div().flex_none().max_w(px(90.)).truncate().text_xs().text_color(rgb(DISABLED)).child(cwd))
-            .when(running, |d| d.child(div().flex_none().text_xs().text_color(rgb(CORAL)).child("✳")))
+            .child(div().flex_none().max_w(px(90.)).truncate().text_xs().text_color(rgb(c_disabled())).child(cwd))
+            .when(running, |d| d.child(div().flex_none().text_xs().text_color(rgb(c_coral())).child("✳")))
             .when(active && self.naming.is_none(), |d| {
-                d.child(row_icon_btn(("term-ren", i), "pencil-02", MUTED).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                d.child(row_icon_btn(("term-ren", i), "pencil-02", c_muted()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.start_rename_terminal(i);
                     cx.notify();
@@ -449,7 +457,7 @@ impl Workspace {
             .on_drag(dragged, |item, _, _, cx| item.preview(cx))
             // dentro de uma pasta: soltar outro terminal em cima dele o põe na mesma pasta
             .when(folder.is_some(), |d| {
-                d.drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(CORAL_DIM))).on_drop(cx.listener(move |this, item: &DraggedSession, _, cx| {
+                d.drag_over::<DraggedSession>(|s, _, _, _| s.bg(rgb(c_coral_dim()))).on_drop(cx.listener(move |this, item: &DraggedSession, _, cx| {
                     this.move_session(item, folder);
                     cx.notify();
                 }))
@@ -502,7 +510,7 @@ impl Workspace {
                             .py(px(4.))
                             .rounded_md()
                             .bg(rgb(0x8a3b3b))
-                            .text_color(rgb(TEXT))
+                            .text_color(rgb(c_text()))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(0xa34646)))
                             .child(yes)
@@ -517,9 +525,9 @@ impl Workspace {
                             .px_3()
                             .py(px(4.))
                             .rounded_md()
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(c_muted()))
                             .cursor_pointer()
-                            .hover(|s| s.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+                            .hover(|s| s.bg(rgb(c_hover())).text_color(rgb(c_text())))
                             .child("Cancelar")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.confirm_trash = None;
@@ -541,11 +549,11 @@ impl Workspace {
                 .gap_2()
                 .px_1()
                 .pt_1()
-                .child(outline_btn("note-add", "notebook", "Nova Nota", AMBER).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                .child(outline_btn("note-add", "notebook", "Nova Nota", c_amber()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.start_naming(false);
                     cx.notify();
                 })))
-                .child(outline_btn("note-add-folder", "folder-closed", "Nova Pasta", AMBER).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                .child(outline_btn("note-add-folder", "folder-closed", "Nova Pasta", c_amber()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.start_naming(true);
                     cx.notify();
                 })))
@@ -566,10 +574,10 @@ impl Workspace {
                 .rounded_md()
                 .text_xs()
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(if at_root { MUTED } else { ACCENT }))
+                .text_color(rgb(if at_root { c_muted() } else { c_accent() }))
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(HOVER)))
-                .drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(AMBER_DIM)).text_color(rgb(TEXT)))
+                .hover(|s| s.bg(rgb(c_hover())))
+                .drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(c_amber_dim())).text_color(rgb(c_text())))
                 .on_drop(cx.listener(|this, item: &DraggedNote, _, cx| {
                     this.move_note(item, "");
                     cx.notify();
@@ -593,19 +601,23 @@ impl Workspace {
         if !filter.is_empty() {
             // busca: lista plana
             let label_of = |rel: &str| rel.rsplit('/').next().unwrap_or(rel).trim_end_matches(".md").to_string();
-            let found: Vec<_> = self.notes.list().unwrap_or_default().into_iter().filter(|n| n.name.to_lowercase().contains(filter)).collect();
+            // pelo nome e também pelo que está escrito dentro (com a primeira linha encontrada)
+            let found = self.notes.search(filter).unwrap_or_default();
             if found.is_empty() {
-                body.push(div().px_2().py_1().text_xs().text_color(rgb(MUTED)).child("Nenhuma nota com esse nome.").into_any_element());
+                body.push(div().px_2().py_1().text_xs().text_color(rgb(c_muted())).child("Nenhuma nota combina.").into_any_element());
             }
             for (i, n) in found.into_iter().enumerate() {
                 let label = label_of(&n.name);
                 body.push(self.note_row(i, n.name, label, 0, None, cx));
+                if !n.snippet.is_empty() {
+                    body.push(div().flex_none().pl(px(38.)).pr_2().pb_1().text_xs().truncate().text_color(rgb(c_disabled())).child(n.snippet).into_any_element());
+                }
             }
             return;
         }
         let nodes = self.notes.tree(&self.note_expanded).unwrap_or_default();
         if nodes.is_empty() {
-            body.push(div().px_2().py_1().text_xs().text_color(rgb(MUTED)).child("Sem notas ainda. Crie a primeira em \"Nova Nota\".").into_any_element());
+            body.push(div().px_2().py_1().text_xs().text_color(rgb(c_muted())).child("Sem notas ainda. Crie a primeira em \"Nova Nota\".").into_any_element());
         }
         for (i, n) in nodes.into_iter().enumerate() {
             body.push(self.note_row(i, n.rel, n.label, n.depth, n.is_dir.then_some(n.expanded), cx));
@@ -655,20 +667,20 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .when(is_dir_sel, |d| d.text_color(rgb(ACCENT)))
-                    .when(!is_current && !is_dir_sel, |d| d.text_color(rgb(MUTED)))
+                    .when(is_dir_sel, |d| d.text_color(rgb(c_accent())))
+                    .when(!is_current && !is_dir_sel, |d| d.text_color(rgb(c_muted())))
                     .child(label)
                     .into_any_element(),
             })
             .when(is_dir_sel && self.naming.is_none(), |d| {
-                d.child(row_icon_btn(("note-ren", i), "pencil-02", MUTED).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                d.child(row_icon_btn(("note-ren", i), "pencil-02", c_muted()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.start_rename_folder(&rel_ren);
                     cx.notify();
                 })))
             })
             .when(is_current || is_dir_sel, |d| {
-                d.child(row_icon_btn(("note-x", i), "trash-02", MUTED).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                d.child(row_icon_btn(("note-x", i), "trash-02", c_muted()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     cx.stop_propagation();
                     this.confirm_trash = Some(rel_trash.clone());
                     cx.notify();
@@ -676,13 +688,13 @@ impl Workspace {
             })
             .on_drag(dragged, |item, _, _, cx| item.preview(cx))
             .when(is_dir, |d| {
-                d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(AMBER_DIM))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
+                d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(c_amber_dim()))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
                     this.move_note(item, &rel_drop);
                     cx.notify();
                 }))
             })
             .when(!is_dir && !parent_dir.is_empty(), |d| {
-                d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(AMBER_DIM))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
+                d.drag_over::<DraggedNote>(|s, _, _, _| s.bg(rgb(c_amber_dim()))).on_drop(cx.listener(move |this, item: &DraggedNote, _, cx| {
                     this.move_note(item, &parent_dir);
                     cx.notify();
                 }))
@@ -723,16 +735,16 @@ impl Workspace {
             .px_2()
             .rounded_md()
             .text_sm()
-            .when(focused, |d| d.bg(rgb(BG)))
-            .when(!focused, |d| d.hover(|s| s.bg(rgb(HOVER))))
-            .child(wicon("filter-funnel", 14., if focused { ACCENT } else { MUTED }))
+            .when(focused, |d| d.bg(rgb(c_bg())))
+            .when(!focused, |d| d.hover(|s| s.bg(rgb(c_hover()))))
+            .child(wicon("filter-funnel", 14., if focused { c_accent() } else { c_muted() }))
             .child(if self.side_filter.is_empty() {
-                div().flex_1().text_color(rgb(MUTED)).child(if focused {
+                div().flex_1().text_color(rgb(c_muted())).child(if focused {
                     "Digite para filtrar…"
                 } else if self.side == Side::Notes {
-                    "Filtrar notas"
+                    "Buscar em notas"
                 } else {
-                    "Filtrar sessões"
+                    "Buscar em sessões"
                 })
             } else {
                 div().flex_1().min_w_0().truncate().child(format!("{}{}", self.side_filter, if focused { "▏" } else { "" }))
@@ -760,7 +772,7 @@ impl Workspace {
                     .flex_none()
                     .size(px(24.))
                     .rounded_full()
-                    .bg(rgb(SURFACE))
+                    .bg(rgb(c_surface()))
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .flex()
@@ -769,7 +781,7 @@ impl Workspace {
                     .child(initial),
             )
             .child(div().flex_1().min_w_0().text_sm().truncate().child(user))
-            .child(div().flex_none().text_xs().text_color(rgb(DISABLED)).child(shell));
+            .child(div().flex_none().text_xs().text_color(rgb(c_disabled())).child(shell));
 
         div()
             .flex_none()
@@ -778,7 +790,7 @@ impl Workspace {
             .gap_1()
             .p_2()
             .border_t_1()
-            .border_color(rgb(DIVIDER))
+            .border_color(rgb(c_divider()))
             .child(filter_box)
             .child(profile)
             .into_any_element()

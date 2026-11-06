@@ -90,8 +90,8 @@ fn tool_btn(id: (&'static str, usize), icon: &str) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_HOVER)))
-        .child(wicon(icon, 14., MUTED))
+        .hover(|s| s.bg(rgb(c_btn_hover())))
+        .child(wicon(icon, 14., c_muted()))
 }
 
 impl Workspace {
@@ -184,7 +184,7 @@ impl Workspace {
                                     div()
                                         .flex_none()
                                         .text_color(rgb(r.fg))
-                                        .when(r.bg != TERM_BG, |d| d.bg(rgb(r.bg)))
+                                        .when(r.bg != c_term_bg(), |d| d.bg(rgb(r.bg)))
                                         .when(r.bold, |d| d.font_weight(FontWeight::BOLD))
                                         .when(r.underline, |d| d.underline())
                                         .child(r.text)
@@ -224,11 +224,11 @@ impl Workspace {
                         .py_1()
                         .rounded(px(4.))
                         .text_xs()
-                        .bg(rgb(SURFACE))
+                        .bg(rgb(c_surface()))
                         .border_1()
-                        .border_color(rgb(BTN_HOVER))
+                        .border_color(rgb(c_btn_hover()))
                         .cursor_pointer()
-                        .child(wicon("chevron-down", 12., TEXT))
+                        .child(wicon("chevron-down", 12., c_text()))
                         .child("Ir ao fim")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.tab().follow = true;
@@ -247,7 +247,7 @@ impl Workspace {
                 .h_full()
                 .flex()
                 .flex_col()
-                .bg(rgb(BG))
+                .bg(rgb(c_bg()))
                 .child(list)
                 .child(bar)
                 .when_some(menu, |d, m| d.child(m))
@@ -277,16 +277,16 @@ impl Workspace {
         let stripe = if failed {
             Some(RED)
         } else if selected {
-            Some(ACCENT)
+            Some(c_accent())
         } else {
             None
         };
         let bg = if failed {
             ERROR_BG
         } else if selected {
-            SELECTED_BLOCK_BG
+            c_selected_block_bg()
         } else {
-            BG
+            c_bg()
         };
         let small = (self.font_size - 2.0).max(11.0);
         let duration = tab.durations.get(&id).map(|s| format_duration(*s));
@@ -301,20 +301,20 @@ impl Workspace {
             .pl(px(8.))
             .font_family(mono.clone())
             .text_size(px(small))
-            .text_color(rgb(DISABLED))
+            .text_color(rgb(c_disabled()))
             .when_some(b.info.venv.clone(), |d, v| d.child(div().flex_none().child(v)))
             .child(div().flex_none().child(b.info.path.clone()))
             .when_some(b.info.branch.clone(), |d, br| {
-                d.child(div().flex_none().flex().items_center().gap(px(4.)).child(wicon("git-branch-02", 12., DISABLED)).child(br))
+                d.child(div().flex_none().flex().items_center().gap(px(4.)).child(wicon("git-branch-02", 12., c_disabled())).child(br))
             })
             .when_some(duration, |d, t| d.child(div().flex_none().child(t)))
-            .when(b.running, |d| d.child(div().flex_none().text_color(rgb(CORAL)).child("✳ executando…")))
+            .when(b.running, |d| d.child(div().flex_none().text_color(rgb(c_coral())).child("✳ executando…")))
             .when(failed, |d| d.child(div().flex_none().text_color(rgb(RED)).child(format!("exit {}", b.status.unwrap_or(0)))))
-            .when(bookmarked, |d| d.child(wicon("bookmark", 12., ACCENT)))
+            .when(bookmarked, |d| d.child(wicon("bookmark", 12., c_accent())))
             .child(div().flex_1())
             // ferramentas do bloco, visíveis ao passar o mouse (como o "toolbelt" do Warp)
             .when(hovered || selected, |d| {
-                d.child(div().flex_none().text_color(rgb(MUTED)).child(b.info.time.clone().unwrap_or_default()))
+                d.child(div().flex_none().text_color(rgb(c_muted())).child(b.info.time.clone().unwrap_or_default()))
                     .child(tool_btn(("blk-copy", uid), "copy").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
                         this.block_action(id, BlockAction::CopyOutput, cx);
@@ -342,13 +342,13 @@ impl Workspace {
             .gap(px(self.cell_w))
             .px(px(8.))
             .rounded(px(6.))
-            .bg(rgb(CMD_BG))
+            .bg(rgb(c_cmd_bg()))
             .font_family(mono.clone())
             .text_size(px(self.font_size))
             .whitespace_nowrap()
             .overflow_hidden()
-            .child(div().flex_none().text_color(rgb(if failed { RED } else { MUTED })).child("❯"))
-            .child(div().flex_none().text_color(rgb(TEXT)).child(if b.command.is_empty() { "—".to_string() } else { b.command.clone() }));
+            .child(div().flex_none().text_color(rgb(if failed { RED } else { c_muted() })).child("❯"))
+            .child(div().flex_none().text_color(rgb(c_text())).child(if b.command.is_empty() { "—".to_string() } else { b.command.clone() }));
 
         div()
             .id(("blk", uid))
@@ -403,7 +403,7 @@ impl Workspace {
                         .font_family(mono.clone())
                         .text_size(px(self.font_size))
                         .line_height(px(self.cell_h))
-                        .text_color(rgb(OUT_TEXT))
+                        .text_color(rgb(c_out_text()))
                         .child(div().flex_none().h(px(first_row as f32 * self.cell_h)))
                         .children(row_els),
                 )
@@ -447,7 +447,7 @@ impl Workspace {
             .into_iter()
             .enumerate()
             .map(|(i, it)| match it {
-                None => div().h(px(1.)).my_1().bg(rgb(BORDER)).into_any_element(),
+                None => div().h(px(1.)).my_1().bg(rgb(c_border())).into_any_element(),
                 Some((icon, label, action)) => div()
                     .id(("blk-menu", i))
                     .h(px(30.))
@@ -458,8 +458,8 @@ impl Workspace {
                     .rounded(px(4.))
                     .text_sm()
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(BTN_HOVER)))
-                    .child(wicon(icon, 14., MUTED))
+                    .hover(|s| s.bg(rgb(c_btn_hover())))
+                    .child(wicon(icon, 14., c_muted()))
                     .child(label)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.block_menu = None;
@@ -478,9 +478,9 @@ impl Workspace {
                 .occlude()
                 .p_1()
                 .rounded(px(6.))
-                .bg(rgb(SURFACE))
+                .bg(rgb(c_surface()))
                 .border_1()
-                .border_color(rgb(BTN_HOVER))
+                .border_color(rgb(c_btn_hover()))
                 .shadow_lg()
                 .flex()
                 .flex_col()
@@ -556,18 +556,18 @@ impl Workspace {
                 .px_3()
                 .rounded(px(4.))
                 .cursor_pointer()
-                .when(active, |d| d.bg(rgb(SURFACE)))
-                .when(!active, |d| d.hover(|s| s.bg(rgb(HOVER))))
+                .when(active, |d| d.bg(rgb(c_surface())))
+                .when(!active, |d| d.hover(|s| s.bg(rgb(c_hover()))))
                 .child(crate::icons::icon_el(&font, &ic, 14.))
                 .child(
                     div()
                         .flex_none()
                         .font_family(self.mono.clone())
                         .text_size(px(14.))
-                        .text_color(rgb(TEXT))
+                        .text_color(rgb(c_text()))
                         .child(format!("{}{}", it.name, if it.is_dir { "/" } else { "" })),
                 )
-                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(rgb(DISABLED)).child(if it.is_dir { "Pasta" } else { "Arquivo" }))
+                .child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(rgb(c_disabled())).child(if it.is_dir { "Pasta" } else { "Arquivo" }))
                 .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if let Some(m) = this.completion.take() {
@@ -587,9 +587,9 @@ impl Workspace {
                 .w(px(w))
                 .p_1()
                 .rounded(px(8.))
-                .bg(rgb(PANEL))
+                .bg(rgb(c_panel()))
                 .border_1()
-                .border_color(rgb(CARD_BORDER))
+                .border_color(rgb(c_card_border()))
                 .shadow_lg()
                 .flex()
                 .flex_col()
@@ -613,7 +613,7 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .text_size(px(12.))
-                            .text_color(rgb(DISABLED))
+                            .text_color(rgb(c_disabled()))
                             .child(format!("{} de {} · ↑↓ escolher · Enter completar · Esc fechar", menu.sel + 1, menu.items.len())),
                     )
                 })
@@ -637,7 +637,7 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .min_w_0()
-                .text_color(rgb(CORAL))
+                .text_color(rgb(c_coral()))
                 .child(div().flex_none().child("✳"))
                 .child(div().min_w_0().truncate().child(format!("Executando… ({secs}s{what})")))
         } else {
@@ -645,11 +645,11 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(14.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(c_muted()))
                 .when_some(venv, |d, v| d.child(div().flex_none().child(v)))
                 .child(div().flex_none().child(shorten(&self.shell_cwd)))
                 .when_some(self.git.clone(), |d, b| {
-                    d.child(div().flex_none().flex().items_center().gap(px(5.)).child(wicon("git-branch-02", 12., MUTED)).child(b))
+                    d.child(div().flex_none().flex().items_center().gap(px(5.)).child(wicon("git-branch-02", 12., c_muted())).child(b))
                 })
         };
         let status = div().h(px(24.)).flex_none().px(px(BLOCK_PAD_X)).flex().items_center().font_family(self.mono.clone()).text_size(px(13.)).child(status);
@@ -667,18 +667,18 @@ impl Workspace {
             .px(px(BLOCK_PAD_X))
             .border_t_1()
             .border_b_1()
-            .border_color(rgb(SURFACE))
+            .border_color(rgb(c_surface()))
             .overflow_hidden()
             .whitespace_nowrap()
             .font_family(self.mono.clone())
             .text_size(px(self.font_size))
-            .child(div().flex_none().w(px(self.cell_w * 2.0)).text_color(rgb(if running { DISABLED } else { TEXT })).child("❯"))
-            .child(div().flex_none().text_color(rgb(TEXT)).child(iv.before))
-            .child(div().flex_none().w(px(self.cell_w * 0.6)).h(px(self.cell_h)).when(self.caret_on, |d| d.bg(rgb(TEXT)).opacity(0.85)))
-            .child(div().flex_none().text_color(rgb(TEXT)).child(if iv.at == ' ' { String::new() } else { iv.at.to_string() }))
-            .child(div().flex_none().text_color(rgb(TEXT)).child(iv.after))
-            .child(div().flex_none().text_color(rgb(DISABLED)).child(ghost))
-            .when(empty, |d| d.child(div().min_w_0().pl(px(4.)).text_color(rgb(DISABLED)).truncate().child(PLACEHOLDER)));
+            .child(div().flex_none().w(px(self.cell_w * 2.0)).text_color(rgb(if running { c_disabled() } else { c_text() })).child("❯"))
+            .child(div().flex_none().text_color(rgb(c_text())).child(iv.before))
+            .child(div().flex_none().w(px(self.cell_w * 0.6)).h(px(self.cell_h)).when(self.caret_on, |d| d.bg(rgb(c_text())).opacity(0.85)))
+            .child(div().flex_none().text_color(rgb(c_text())).child(if iv.at == ' ' { String::new() } else { iv.at.to_string() }))
+            .child(div().flex_none().text_color(rgb(c_text())).child(iv.after))
+            .child(div().flex_none().text_color(rgb(c_disabled())).child(ghost))
+            .when(empty, |d| d.child(div().min_w_0().pl(px(4.)).text_color(rgb(c_disabled())).truncate().child(PLACEHOLDER)));
 
         let hint_items: &[&str] = if running {
             &["ctrl-c interrompe", "o que você digita vai para o programa", "ctrl-shift-f busca na saída"]
@@ -694,10 +694,10 @@ impl Workspace {
             .gap_2()
             .font_family(self.mono.clone())
             .text_size(px(12.))
-            .text_color(rgb(AMBER))
+            .text_color(rgb(c_amber()))
             .whitespace_nowrap()
             .child(div().flex_none().child("▸▸"))
-            .child(div().text_color(rgb(MUTED)).child(fit_hints(hint_items, (((main_w - BLOCK_PAD_X * 2.0 - 30.0) / 7.4).max(0.0)) as usize)));
+            .child(div().text_color(rgb(c_muted())).child(fit_hints(hint_items, (((main_w - BLOCK_PAD_X * 2.0 - 30.0) / 7.4).max(0.0)) as usize)));
 
         div()
             .w_full()
@@ -707,7 +707,7 @@ impl Workspace {
             .flex_col()
             .justify_center()
             .gap(px(4.))
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .child(status)
             .child(input)
             .child(hints)

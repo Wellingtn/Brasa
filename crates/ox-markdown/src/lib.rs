@@ -2,7 +2,7 @@
 //! Blocos de shell (` ```bash `) são marcados como executáveis; a UI mostra o botão "Executar".
 
 mod store;
-pub use store::{NoteMeta, NoteNode, NoteStore, StoreError};
+pub use store::{NoteHit, NoteMeta, NoteNode, NoteStore, StoreError};
 
 use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 

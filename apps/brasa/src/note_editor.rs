@@ -69,8 +69,8 @@ fn card_btn(id: impl Into<gpui::ElementId>, icon: &'static str) -> gpui::Statefu
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_HOVER)))
-        .child(wicon(icon, 16., TEXT))
+        .hover(|s| s.bg(rgb(c_btn_hover())))
+        .child(wicon(icon, 16., c_text()))
 }
 
 /// Rótulo da linguagem de um bloco de código, como no seletor do Warp.
@@ -1080,7 +1080,7 @@ impl Workspace {
         let status = match self.editor.as_ref() {
             Some(e) if e.dirty() => (if e.file.is_some() { "● não salvo" } else { "● alterações" }, YELLOW),
             Some(_) => ("✓ salvo", GREEN),
-            None => ("", MUTED),
+            None => ("", c_muted()),
         };
 
         // cabeçalho do painel: título centralizado e botões à direita; sem divisória
@@ -1091,7 +1091,7 @@ impl Workspace {
             .flex()
             .items_center()
             .justify_center()
-            .child(div().max_w(px(260.)).text_sm().text_color(rgb(MUTED)).truncate().child(if note_title.is_empty() { "Notas".to_string() } else { note_title.clone() }))
+            .child(div().max_w(px(260.)).text_sm().text_color(rgb(c_muted())).truncate().child(if note_title.is_empty() { "Notas".to_string() } else { note_title.clone() }))
             .child(
                 div()
                     .absolute()
@@ -1123,9 +1123,9 @@ impl Workspace {
             .text_size(px(ED_FONT * TITLE_SCALE))
             .font_weight(FontWeight::BOLD)
             .child(if shown.is_empty() {
-                div().text_color(rgb(MUTED)).child(format!("Sem título{}", if focused { "▏" } else { "" }))
+                div().text_color(rgb(c_muted())).child(format!("Sem título{}", if focused { "▏" } else { "" }))
             } else {
-                div().text_color(rgb(TEXT)).truncate().child(format!("{shown}{}", if focused { "▏" } else { "" }))
+                div().text_color(rgb(c_text())).truncate().child(format!("{shown}{}", if focused { "▏" } else { "" }))
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -1153,11 +1153,11 @@ impl Workspace {
             // visualizador de imagem
             let crumbs = path.parent().map(|d| shorten(d)).unwrap_or_default();
             column(
-                div().flex().flex_col().child(details_row().child(div().min_w_0().text_xs().text_color(rgb(MUTED)).truncate().child(crumbs))).child(title).into_any_element(),
+                div().flex().flex_col().child(details_row().child(div().min_w_0().text_xs().text_color(rgb(c_muted())).truncate().child(crumbs))).child(title).into_any_element(),
                 div().id("image-view").flex_1().min_h_0().overflow_y_scroll().px(px(CONTENT_PAD)).child(img(path).max_w_full()).into_any_element(),
             )
         } else if let Some(msg) = self.file_notice.clone() {
-            div().flex_1().flex().items_center().justify_center().p_4().text_sm().text_color(rgb(MUTED)).child(msg).into_any_element()
+            div().flex_1().flex().items_center().justify_center().p_4().text_sm().text_color(rgb(c_muted())).child(msg).into_any_element()
         } else if self.editor.is_none() {
             div()
                 .flex_1()
@@ -1166,7 +1166,7 @@ impl Workspace {
                 .justify_center()
                 .p_4()
                 .text_sm()
-                .text_color(rgb(MUTED))
+                .text_color(rgb(c_muted()))
                 .child("Abra uma nota ou um arquivo pela barra lateral.")
                 .into_any_element()
         } else if let Some(path) = file_path {
@@ -1199,7 +1199,7 @@ impl Workspace {
                         b.redo();
                     }, cx)
                 })));
-            let details = details_row().child(div().min_w_0().text_xs().text_color(rgb(MUTED)).truncate().child(crumbs)).child(tools);
+            let details = details_row().child(div().min_w_0().text_xs().text_color(rgb(c_muted())).truncate().child(crumbs)).child(tools);
             let editor = self.render_editor(window, cx);
             column(div().flex().flex_col().child(details).child(title).into_any_element(), editor)
         } else {
@@ -1212,8 +1212,8 @@ impl Workspace {
                 parts.join("  ›  ")
             };
             let editing = mode == NoteMode::Edit;
-            let pencil = Icon { svg: Some("icons/pencil-02.svg"), glyph: '\u{f040}', color: if editing { ACCENT } else { MUTED }, fallback: "✎".into() };
-            let details = details_row().child(div().min_w_0().text_xs().text_color(rgb(MUTED)).truncate().child(crumbs)).child(
+            let pencil = Icon { svg: Some("icons/pencil-02.svg"), glyph: '\u{f040}', color: if editing { c_accent() } else { c_muted() }, fallback: "✎".into() };
+            let details = details_row().child(div().min_w_0().text_xs().text_color(rgb(c_muted())).truncate().child(crumbs)).child(
                 div()
                     .id("mode-toggle")
                     .flex_none()
@@ -1224,8 +1224,8 @@ impl Workspace {
                     .py(px(2.))
                     .rounded_md()
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(HOVER)))
-                    .child(div().text_xs().text_color(rgb(MUTED)).child(if editing { "Editando" } else { "Visualizando" }))
+                    .hover(|s| s.bg(rgb(c_hover())))
+                    .child(div().text_xs().text_color(rgb(c_muted())).child(if editing { "Editando" } else { "Visualizando" }))
                     .child(icon_el(&font, &pencil, 13.))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         let next = if this.note_mode == NoteMode::Edit { NoteMode::View } else { NoteMode::Edit };
@@ -1248,10 +1248,10 @@ impl Workspace {
             .flex_none()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .when(!self.show_sidebar, |d| d.rounded_bl(px(self.corner_r)))
             .border_r_1()
-            .border_color(rgb(DIVIDER))
+            .border_color(rgb(c_divider()))
             .child(header)
             .child(content)
             .into_any_element()
@@ -1343,7 +1343,7 @@ impl Workspace {
                                         weight: if key.0 { FontWeight::BOLD } else { FontWeight::NORMAL },
                                         style: if key.1 { FontStyle::Italic } else { FontStyle::Normal },
                                     },
-                                    color: hsla(TEXT),
+                                    color: hsla(c_text()),
                                     background_color: None,
                                     underline: None,
                                     strikethrough: None,
@@ -1439,12 +1439,12 @@ impl Workspace {
             let chars: Vec<char> = line_text.chars().collect();
             let marker = if code { None } else { marker_range(kind, line_text) };
             let (text_color, marker_color, bold) = match kind {
-                LineKind::Normal => (TEXT, ACCENT, false),
-                LineKind::Heading(_) => (TEXT, MUTED, true),
-                LineKind::Fence => (MUTED, MUTED, false),
+                LineKind::Normal => (c_text(), c_accent(), false),
+                LineKind::Heading(_) => (c_text(), c_muted(), true),
+                LineKind::Fence => (c_muted(), c_muted(), false),
                 LineKind::Code => (syntax::PLAIN, syntax::PLAIN, false),
-                LineKind::Quote => (MUTED, ACCENT, false),
-                LineKind::Divider => (MUTED, MUTED, false),
+                LineKind::Quote => (c_muted(), c_accent(), false),
+                LineKind::Divider => (c_muted(), c_muted(), false),
             };
             // trechos (texto, cor, negrito): realce de sintaxe ou marcadores de Markdown esmaecidos
             let segments: Vec<Seg> = if hidden {
@@ -1468,13 +1468,13 @@ impl Workspace {
                     let color = if line_mark {
                         marker_color
                     } else if cs.mark {
-                        DISABLED
+                        c_disabled()
                     } else if cs.link {
-                        AMBER
+                        c_amber()
                     } else if cs.code {
-                        ACCENT
+                        c_accent()
                     } else if cs.strike {
-                        MUTED
+                        c_muted()
                     } else {
                         text_color
                     };
@@ -1485,7 +1485,7 @@ impl Workspace {
                         italic: cs.italic,
                         strike: cs.strike && !cs.mark,
                         underline: cs.link,
-                        bg: (cs.code && !cs.mark).then_some(CODE_BG),
+                        bg: (cs.code && !cs.mark).then_some(c_code_bg()),
                     };
                     let key = (seg.color, seg.bold, seg.italic, seg.strike, seg.underline, seg.bg);
                     match out.last_mut() {
@@ -1545,10 +1545,10 @@ impl Workspace {
                         let top = c.role == CardRole::Open && r.start == 0;
                         // bloco sem fechamento vai até o fim da nota: fecha o contorno na última linha
                         let bottom = (c.role == CardRole::Close || (c.close.is_none() && r.line + 1 == n_lines)) && is_last;
-                        d.bg(rgb(CODE_BG))
+                        d.bg(rgb(c_code_bg()))
                             .border_l_1()
                             .border_r_1()
-                            .border_color(rgb(CARD_BORDER))
+                            .border_color(rgb(c_card_border()))
                             .when(top, |d| d.border_t_1().rounded_t(px(8.)))
                             .when(bottom, |d| d.border_b_1().rounded_b(px(8.)))
                     })
@@ -1575,12 +1575,12 @@ impl Workspace {
                                 .items_center()
                                 .justify_end()
                                 .text_size(px(size * 0.85))
-                                .text_color(rgb(if r.line == cursor.line { MUTED } else { DISABLED }))
+                                .text_color(rgb(if r.line == cursor.line { c_muted() } else { c_disabled() }))
                                 .child((r.line + 1).to_string()),
                         )
                     })
-                    .when_some(sel_span.filter(|_| !hidden), |d, (a, b)| d.child(div().absolute().left(px(a + pad)).w(px((b - a).max(0.0))).h_full().bg(rgb(SELECTION))))
-                    .when(kind == LineKind::Divider, |d| d.child(div().absolute().left_0().right_0().top(px(rh / 2.)).h(px(1.)).bg(rgb(BORDER))))
+                    .when_some(sel_span.filter(|_| !hidden), |d, (a, b)| d.child(div().absolute().left(px(a + pad)).w(px((b - a).max(0.0))).h_full().bg(rgb(c_selection()))))
+                    .when(kind == LineKind::Divider, |d| d.child(div().absolute().left_0().right_0().top(px(rh / 2.)).h(px(1.)).bg(rgb(c_border()))))
                     .child(div().flex().flex_row().h_full().ml(px(pad)).items_center().children(segments.into_iter().map(|sg| {
                         // tabulação: 4 espaços no código (bate com as medidas), 1 espaço no texto proporcional
                         let t = if is_mono { sg.text.replace('\t', "    ") } else { sg.text.replace('\t', " ") };
@@ -1608,12 +1608,12 @@ impl Workspace {
                                 .items_center()
                                 .justify_center()
                                 .cursor_pointer()
-                                .hover(|s| s.bg(rgb(HOVER)))
-                                .child(wicon("plus", 14., MUTED))
+                                .hover(|s| s.bg(rgb(c_hover())))
+                                .child(wicon("plus", 14., c_muted()))
                                 .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.editor_plus(line, cx))),
                         )
-                        .child(div().absolute().left(px(4.)).top_0().h_full().flex().items_center().text_color(rgb(DISABLED)).child(EMPTY_HINT))
+                        .child(div().absolute().left(px(4.)).top_0().h_full().flex().items_center().text_color(rgb(c_disabled())).child(EMPTY_HINT))
                     })
                     .when(cur_row == i && !hidden, |d| {
                         d.child(
@@ -1623,7 +1623,7 @@ impl Workspace {
                                 .top(px(2.))
                                 .h(px(rh - 4.))
                                 .w(px(if focused { 2. } else { 1. }))
-                                .when(caret_on || !focused, |d| d.bg(rgb(if focused { ACCENT } else { MUTED }))),
+                                .when(caret_on || !focused, |d| d.bg(rgb(if focused { c_accent() } else { c_muted() }))),
                         )
                     })
                     .when_some(footer, |d, (open, label, body, run)| {
@@ -1652,13 +1652,13 @@ impl Workspace {
                                         .gap_2()
                                         .rounded(px(6.))
                                         .border_1()
-                                        .border_color(rgb(if menu_open { ACCENT } else { CARD_BORDER }))
+                                        .border_color(rgb(if menu_open { c_accent() } else { c_card_border() }))
                                         .text_size(px(13.))
-                                        .text_color(rgb(MUTED))
+                                        .text_color(rgb(c_muted()))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+                                        .hover(|s| s.bg(rgb(c_hover())).text_color(rgb(c_text())))
                                         .child(label)
-                                        .child(wicon("chevron-down", 12., MUTED))
+                                        .child(wicon("chevron-down", 12., c_muted()))
                                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                             this.focus_editor = true; // Esc e as setas continuam no editor
                                             if let Some(e) = this.editor.as_mut() {
@@ -1741,27 +1741,27 @@ impl Workspace {
                 .items_center()
                 .gap_2()
                 .border_b_1()
-                .border_color(rgb(CARD_BORDER))
-                .child(wicon("search", 14., MUTED))
-                .child(div().w(px(2.)).h(px(16.)).bg(rgb(ACCENT)))
+                .border_color(rgb(c_card_border()))
+                .child(wicon("search", 14., c_muted()))
+                .child(div().w(px(2.)).h(px(16.)).bg(rgb(c_accent())))
                 .child(if query.is_empty() {
-                    div().text_color(rgb(DISABLED)).child("Buscar bloco ou nota")
+                    div().text_color(rgb(c_disabled())).child("Buscar bloco ou nota")
                 } else {
-                    div().text_color(rgb(TEXT)).child(query)
+                    div().text_color(rgb(c_text())).child(query)
                 });
             let list = div().id("slash-list").relative().flex_1().min_h_0().overflow_hidden().p_1().flex().flex_col();
             let list = if items.is_empty() {
-                list.child(div().px_2().py_2().text_color(rgb(MUTED)).child("Nada com esse nome. Apague para ver tudo."))
+                list.child(div().px_2().py_2().text_color(rgb(c_muted())).child("Nada com esse nome. Apague para ver tudo."))
             } else {
                 list.children(items.into_iter().enumerate().skip(first).take(SLASH_VISIBLE).map(|(i, it)| {
                     let (icon, glyph, color, title, sub) = match &it {
                         SlashChoice::Block(b) => {
-                            let color = if b.label == "Comando" { CORAL } else { MUTED };
+                            let color = if b.label == "Comando" { c_coral() } else { c_muted() };
                             (b.icon, b.glyph, color, b.label.to_string(), "Bloco".to_string())
                         }
                         SlashChoice::Note { label, dir, .. } => {
                             let sub = if dir.is_empty() { "Notas".to_string() } else { format!("Notas / {}", dir.replace('/', " / ")) };
-                            (Some("notebook"), "", ACCENT, label.clone(), sub)
+                            (Some("notebook"), "", c_accent(), label.clone(), sub)
                         }
                     };
                     let active = i == sel;
@@ -1775,8 +1775,8 @@ impl Workspace {
                         .px_2()
                         .rounded(px(4.))
                         .cursor_pointer()
-                        .when(active, |d| d.bg(rgb(SELECTION)))
-                        .when(!active, |d| d.hover(|s| s.bg(rgb(HOVER))))
+                        .when(active, |d| d.bg(rgb(c_selection())))
+                        .when(!active, |d| d.hover(|s| s.bg(rgb(c_hover()))))
                         .child(
                             div()
                                 .flex_none()
@@ -1787,7 +1787,7 @@ impl Workspace {
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(rgb(color))
                                 .child(match icon {
-                                    Some(name) => wicon(name, 16., if active { TEXT } else { color }).into_any_element(),
+                                    Some(name) => wicon(name, 16., if active { c_text() } else { color }).into_any_element(),
                                     None => div().child(glyph).into_any_element(),
                                 }),
                         )
@@ -1797,8 +1797,8 @@ impl Workspace {
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .child(div().truncate().text_color(rgb(TEXT)).child(title))
-                                .child(div().text_size(px(12.)).line_height(px(16.)).truncate().text_color(rgb(if active { TEXT } else { MUTED })).child(sub)),
+                                .child(div().truncate().text_color(rgb(c_text())).child(title))
+                                .child(div().text_size(px(12.)).line_height(px(16.)).truncate().text_color(rgb(if active { c_text() } else { c_muted() })).child(sub)),
                         )
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.apply_slash(it.clone(), cx)))
                 }))
@@ -1812,9 +1812,9 @@ impl Workspace {
                 .w(px((content_w - CONTENT_PAD * 2.0 - gutter).clamp(240.0, 500.0)))
                 .h(px(menu_h))
                 .rounded(px(6.))
-                .bg(rgb(PANEL))
+                .bg(rgb(c_panel()))
                 .border_1()
-                .border_color(rgb(CARD_BORDER))
+                .border_color(rgb(c_card_border()))
                 .shadow_lg()
                 .text_size(px(14.))
                 .line_height(px(20.))
@@ -1840,7 +1840,7 @@ impl Workspace {
                     let track = SLASH_VISIBLE as f32 * SLASH_ROW_H;
                     let len = (track * SLASH_VISIBLE as f32 / total as f32).max(24.0);
                     let top = (track - len) * first as f32 / (total - SLASH_VISIBLE) as f32;
-                    d.child(div().absolute().right(px(3.)).top(px(4.0 + top)).w(px(4.)).h(px(len)).rounded_full().bg(rgb(BTN_HOVER)))
+                    d.child(div().absolute().right(px(3.)).top(px(4.0 + top)).w(px(4.)).h(px(len)).rounded_full().bg(rgb(c_btn_hover())))
                 }))
         });
 
@@ -1854,9 +1854,9 @@ impl Workspace {
                 .w(px(160.))
                 .p_1()
                 .rounded(px(6.))
-                .bg(rgb(PANEL))
+                .bg(rgb(c_panel()))
                 .border_1()
-                .border_color(rgb(CARD_BORDER))
+                .border_color(rgb(c_card_border()))
                 .shadow_lg()
                 .text_size(px(13.))
                 .flex()
@@ -1873,10 +1873,10 @@ impl Workspace {
                         .items_center()
                         .justify_between()
                         .cursor_pointer()
-                        .text_color(rgb(if on { TEXT } else { MUTED }))
-                        .hover(|s| s.bg(rgb(HOVER)).text_color(rgb(TEXT)))
+                        .text_color(rgb(if on { c_text() } else { c_muted() }))
+                        .hover(|s| s.bg(rgb(c_hover())).text_color(rgb(c_text())))
                         .child(*label)
-                        .when(on, |d| d.child(wicon("check", 13., ACCENT)))
+                        .when(on, |d| d.child(wicon("check", 13., c_accent())))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.set_card_lang(open, lang, cx)))
                 }))
         });
@@ -1893,13 +1893,13 @@ impl Workspace {
                 .gap(px(2.))
                 .p(px(3.))
                 .rounded(px(4.))
-                .bg(rgb(SURFACE))
+                .bg(rgb(c_surface()))
                 .border_1()
-                .border_color(rgb(BTN_HOVER))
+                .border_color(rgb(c_btn_hover()))
                 .shadow_md();
             for (id, label, op) in OMNIBAR.iter().copied() {
                 if matches!(id, "om-b" | "om-list") {
-                    bar = bar.child(div().w(px(1.)).h(px(16.)).mx(px(3.)).bg(rgb(BTN_HOVER)));
+                    bar = bar.child(div().w(px(1.)).h(px(16.)).mx(px(3.)).bg(rgb(c_btn_hover())));
                 }
                 bar = bar.child(
                     div()
@@ -1912,7 +1912,7 @@ impl Workspace {
                         .rounded(px(4.))
                         .cursor_pointer()
                         .text_size(px(14.))
-                        .hover(|s| s.bg(rgb(BTN_HOVER)))
+                        .hover(|s| s.bg(rgb(c_btn_hover())))
                         .when(label == "B", |d| d.font_weight(FontWeight::BOLD))
                         .when(label == "I", |d| d.italic())
                         .child(label)
@@ -1980,9 +1980,9 @@ impl Workspace {
                     3 => d.text_size(px(19.)),
                     _ => d.text_size(px(17.)),
                 };
-                d.child(self.rich(inlines, base, true, TEXT)).into_any_element()
+                d.child(self.rich(inlines, base, true, c_text())).into_any_element()
             }
-            Block::Paragraph(inlines) => div().child(self.rich(inlines, base, false, TEXT)).into_any_element(),
+            Block::Paragraph(inlines) => div().child(self.rich(inlines, base, false, c_text())).into_any_element(),
             Block::ListItem { depth, number, checked, inlines } => {
                 let marker = match (number, checked) {
                     (_, Some(true)) => "☑".to_string(),
@@ -1994,30 +1994,30 @@ impl Workspace {
                     .flex()
                     .gap_2()
                     .pl(px(*depth as f32 * 16.))
-                    .child(div().flex_none().text_color(rgb(MUTED)).child(marker))
-                    .child(div().flex_1().min_w_0().child(self.rich(inlines, base, false, TEXT)))
+                    .child(div().flex_none().text_color(rgb(c_muted())).child(marker))
+                    .child(div().flex_1().min_w_0().child(self.rich(inlines, base, false, c_text())))
                     .into_any_element()
             }
             Block::Callout { kind, inlines } => {
                 let (label, color) = match kind {
-                    Some(CalloutKind::Note) => ("NOTA", ACCENT),
+                    Some(CalloutKind::Note) => ("NOTA", c_accent()),
                     Some(CalloutKind::Tip) => ("DICA", GREEN),
                     Some(CalloutKind::Important) => ("IMPORTANTE", PURPLE),
                     Some(CalloutKind::Warning) => ("ATENÇÃO", YELLOW),
                     Some(CalloutKind::Caution) => ("CUIDADO", RED),
-                    None => ("", MUTED),
+                    None => ("", c_muted()),
                 };
                 div()
                     .p_2()
                     .rounded_sm()
                     .border_l_2()
                     .border_color(rgb(color))
-                    .bg(rgb(CODE_BG))
+                    .bg(rgb(c_code_bg()))
                     .flex()
                     .flex_col()
                     .gap_1()
                     .when(!label.is_empty(), |d| d.child(div().text_xs().text_color(rgb(color)).child(label)))
-                    .child(self.rich(inlines, base, false, TEXT))
+                    .child(self.rich(inlines, base, false, c_text()))
                     .into_any_element()
             }
             Block::Code(c) => {
@@ -2039,9 +2039,9 @@ impl Workspace {
                             .items_center()
                             .rounded(px(6.))
                             .border_1()
-                            .border_color(rgb(CARD_BORDER))
+                            .border_color(rgb(c_card_border()))
                             .text_size(px(13.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(c_muted()))
                             .child(lang_label(&c.lang)),
                     )
                     .child(
@@ -2059,31 +2059,34 @@ impl Workspace {
                             }),
                     );
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .rounded(px(8.))
                     .border_1()
-                    .border_color(rgb(CARD_BORDER))
-                    .bg(rgb(CODE_BG))
+                    .border_color(rgb(c_card_border()))
+                    .bg(rgb(c_code_bg()))
                     .pl(px(CARD_PAD))
                     .pr(px(8.))
                     .pt(px(CARD_TOP_H))
                     .pb(px(8.))
                     .child(
-                        div().flex().flex_col().font_family(self.mono.clone()).text_size(px(14.)).children(c.code.lines().map(|line| {
+                        // comando comprido quebra a linha nos espaços em vez de sair do cartão; uma palavra sem
+                        // espaço maior que a largura é cortada na borda
+                        div().w_full().min_w_0().overflow_hidden().flex().flex_col().font_family(self.mono.clone()).text_size(px(14.)).children(c.code.lines().map(|line| {
                             let chars: Vec<char> = line.chars().collect();
                             let cols = syntax::colors(Lang::from_name(&c.lang), line);
-                            div()
-                                .flex()
-                                .min_h(px(20.))
-                                .whitespace_nowrap()
-                                .children(syntax::spans(&chars, &cols, 0, chars.len()).into_iter().map(|(t, col)| div().flex_none().text_color(rgb(col)).child(t.replace('\t', "    "))))
+                            div().w_full().min_w_0().flex().flex_wrap().min_h(px(20.)).children(syntax::spans(&chars, &cols, 0, chars.len()).into_iter().flat_map(|(t, col)| {
+                                let text = t.replace('\t', "    ");
+                                text.split_inclusive(' ').map(|w| div().flex_none().whitespace_nowrap().text_color(rgb(col)).child(w.to_string())).collect::<Vec<_>>()
+                            }))
                         })),
                     )
                     .child(footer)
                     .into_any_element()
             }
-            Block::Rule => div().h(px(1.)).bg(rgb(BORDER)).into_any_element(),
+            Block::Rule => div().h(px(1.)).bg(rgb(c_border())).into_any_element(),
         }
     }
 
@@ -2103,16 +2106,16 @@ impl Workspace {
             }
             if i.code {
                 r.font.family = self.mono.clone();
-                r.background_color = Some(hsla(CODE_BG));
-                r.color = hsla(ACCENT);
+                r.background_color = Some(hsla(c_code_bg()));
+                r.color = hsla(c_accent());
             }
             if i.strike {
-                r.strikethrough = Some(gpui::StrikethroughStyle { thickness: px(1.), color: Some(hsla(MUTED)) });
-                r.color = hsla(MUTED);
+                r.strikethrough = Some(gpui::StrikethroughStyle { thickness: px(1.), color: Some(hsla(c_muted())) });
+                r.color = hsla(c_muted());
             }
             if i.link.is_some() {
-                r.color = hsla(AMBER);
-                r.underline = Some(gpui::UnderlineStyle { thickness: px(1.), color: Some(hsla(AMBER)), wavy: false });
+                r.color = hsla(c_amber());
+                r.underline = Some(gpui::UnderlineStyle { thickness: px(1.), color: Some(hsla(c_amber())), wavy: false });
             }
             text.push_str(&i.text);
             runs.push(r);

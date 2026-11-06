@@ -19,8 +19,10 @@
 
 - **Cada comando é um bloco.** Você vê o que rodou, quanto tempo levou, se deu certo, e copia só a saída de que precisa.
 - **Notas que executam.** Escreva em Markdown e rode um bloco de código direto no terminal.
+- **Busca de verdade.** A caixa no topo (`Ctrl+K`) procura de uma vez em notas, pelo nome e pelo texto, e em sessões, pelo nome e pelo que apareceu na saída.
 - **Sessões organizadas.** Dê nome aos terminais, agrupe em pastas e divida a tela lado a lado.
 - **Arquivos e desempenho ao lado.** Gerenciador de arquivos com tamanho das pastas, permissões e visualizador de imagens, e monitor de CPU, memória e processos.
+- **Seu jeito.** Troque a cor do tema (o logo acompanha), o fundo, a fonte e o tamanho sem editar arquivos.
 - **Leve.** Cerca de 120 MB de memória e perto de 0% de CPU parado, desenhado pela placa de vídeo. Veja os números em [Desempenho](#desempenho).
 
 ## Instalação
@@ -64,6 +66,15 @@ Para instalar o executável, rode `cargo build -p brasa --release` e copie `targ
 
 Testado no Pop!_OS 24.04 com GNOME 46.
 
+## Configurações
+
+O botão de engrenagem, ao lado do medidor de CPU, abre as configurações na área à direita da barra lateral.
+
+- **Geral:** versão e shell em uso, aviso de nova versão, atalhos de teclado (clique num atalho e aperte o novo), pastas de notas e de configuração, o medidor de latência do teclado e o botão que restaura a aparência padrão.
+- **Aparência:** cor do tema (vermelho, azul, verde, roxo, uma cor própria pela roda de matizes ou por hexadecimal), cor de fundo (carvão, preto, grafite ou um hexadecimal), fonte do terminal com busca e tamanho da fonte numa régua, com uma pré-visualização que você pode editar.
+
+As escolhas valem na hora e ficam em `~/.config/brasa`.
+
 ## Atalhos principais
 
 | Ação | Atalho |
@@ -74,6 +85,7 @@ Testado no Pop!_OS 24.04 com GNOME 46.
 | Mostrar ou esconder as notas | `Ctrl+Shift+N` |
 | Desempenho (CPU, memória, processos) | `Ctrl+Shift+M` |
 | Buscar na saída | `Ctrl+Shift+F` |
+| Buscar em notas e sessões | `Ctrl+K` |
 | Zoom | `Ctrl+=` / `Ctrl+-` |
 
 ## Desempenho

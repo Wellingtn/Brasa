@@ -3,7 +3,7 @@
 
 use gpui::{div, prelude::*, px, rgb, Div, ScrollHandle, Stateful};
 
-use crate::theme::BTN_HOVER;
+use crate::theme::*;
 
 const MIN_THUMB: f32 = 28.0;
 
@@ -21,7 +21,7 @@ pub fn thumb_geometry(view_h: f32, max_scroll: f32, offset: f32) -> Option<(f32,
 }
 
 pub fn thumb(top: f32, len: f32) -> Div {
-    div().absolute().right(px(2.)).top(px(top)).w(px(4.)).h(px(len)).rounded_full().bg(rgb(BTN_HOVER))
+    div().absolute().right(px(2.)).top(px(top)).w(px(4.)).h(px(len)).rounded_full().bg(rgb(c_btn_hover()))
 }
 
 /// Área rolável com polegar. `content` é a coluna de itens (já com `id`); aqui ganha rolagem e o rastreio.

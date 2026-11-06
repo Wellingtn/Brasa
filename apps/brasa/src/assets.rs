@@ -7,7 +7,18 @@ use gpui::{AssetSource, Result, SharedString};
 
 static FILES: &[(&str, &[u8])] = &[
     // logo da Brasa: a chama com o prompt e o nome (cópia de branding/brasa-logo-dark.png)
-    ("brand/brasa-logo.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo.png"))),
+    ("brand/brasa-logo-h0.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h0.png"))),
+    ("brand/brasa-logo-h30.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h30.png"))),
+    ("brand/brasa-logo-h60.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h60.png"))),
+    ("brand/brasa-logo-h90.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h90.png"))),
+    ("brand/brasa-logo-h120.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h120.png"))),
+    ("brand/brasa-logo-h150.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h150.png"))),
+    ("brand/brasa-logo-h180.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h180.png"))),
+    ("brand/brasa-logo-h210.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h210.png"))),
+    ("brand/brasa-logo-h240.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h240.png"))),
+    ("brand/brasa-logo-h270.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h270.png"))),
+    ("brand/brasa-logo-h300.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h300.png"))),
+    ("brand/brasa-logo-h330.png", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/brand/brasa-logo-h330.png"))),
     ("icons/add.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/add.svg"))),
     ("icons/alert-triangle.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/alert-triangle.svg"))),
     ("icons/arrow-left.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/arrow-left.svg"))),
@@ -52,6 +63,7 @@ static FILES: &[(&str, &[u8])] = &[
     ("icons/refresh.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/refresh.svg"))),
     ("icons/save-01.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/save-01.svg"))),
     ("icons/search.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/search.svg"))),
+    ("icons/gear.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/gear.svg"))),
     ("icons/settings.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/settings.svg"))),
     ("icons/share-01.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/share-01.svg"))),
     ("icons/sort.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/sort.svg"))),
@@ -110,6 +122,14 @@ impl AssetSource for Assets {
 /// Fontes para registrar no início (Hack = terminal e código; Roboto = interface e texto das notas).
 pub fn fonts() -> Vec<Cow<'static, [u8]>> {
     FONTS.iter().map(|b| Cow::Borrowed(*b)).collect()
+}
+
+impl Assets {
+    /// Bytes de um arquivo embutido, se existir (usado nos testes do tema).
+    #[cfg(test)]
+    pub fn load_path(&self, path: &str) -> Option<&'static [u8]> {
+        FILES.iter().find(|(p, _)| *p == path).map(|(_, b)| *b)
+    }
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@ fn win_btn(id: &'static str, glyph: &'static str, hover_bg: u32, hover_fg: u32) 
         .items_center()
         .justify_center()
         .text_size(px(14.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(c_muted()))
         .cursor_pointer()
         .hover(move |s| s.bg(rgb(hover_bg)).text_color(rgb(hover_fg)))
         .child(glyph)
@@ -34,7 +34,7 @@ fn win_btn(id: &'static str, glyph: &'static str, hover_bg: u32, hover_fg: u32) 
 
 /// Botão "dividir": retângulo com a linha no meio (vertical = lado a lado, horizontal = embaixo).
 fn split_btn(id: &'static str, row: bool) -> Stateful<Div> {
-    let line = div().absolute().bg(rgb(MUTED));
+    let line = div().absolute().bg(rgb(c_muted()));
     div()
         .id(id)
         .flex_none()
@@ -44,7 +44,7 @@ fn split_btn(id: &'static str, row: bool) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(HOVER)))
+        .hover(|s| s.bg(rgb(c_hover())))
         .child(
             div()
                 .relative()
@@ -52,7 +52,7 @@ fn split_btn(id: &'static str, row: bool) -> Stateful<Div> {
                 .h(px(13.))
                 .rounded(px(2.))
                 .border_1()
-                .border_color(rgb(MUTED))
+                .border_color(rgb(c_muted()))
                 .child(if row { line.left(px(6.)).top_0().bottom_0().w(px(1.)) } else { line.top(px(5.)).left_0().right_0().h(px(1.)) }),
         )
 }
@@ -80,7 +80,7 @@ impl Workspace {
         } else if pct < 80.0 {
             YELLOW
         } else {
-            CORAL
+            c_coral()
         };
         const METER_W: f32 = 38.0;
         div()
@@ -94,16 +94,16 @@ impl Workspace {
             .gap(px(8.))
             .rounded_md()
             .border_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(HOVER)))
-            .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child("CPU"))
+            .hover(|s| s.bg(rgb(c_hover())))
+            .child(div().text_size(px(12.)).text_color(rgb(c_muted())).child("CPU"))
             .child(
                 div()
                     .w(px(METER_W))
                     .h(px(6.))
                     .rounded_full()
-                    .bg(rgb(SURFACE))
+                    .bg(rgb(c_surface()))
                     .child(div().h_full().rounded_full().w(px(METER_W * pct.clamp(0.0, 100.0) / 100.0)).bg(rgb(color))),
             )
             .child(
@@ -113,7 +113,7 @@ impl Workspace {
                     .justify_end()
                     .font_family(self.mono.clone())
                     .text_size(px(12.))
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(c_text()))
                     .child(if sampled { format!("{pct:.0}%") } else { "–".to_string() }),
             )
             .when(self.panes.contains(crate::panes::PaneKind::Cpu), |d| d.border_color(rgb(color)))
@@ -126,9 +126,22 @@ impl Workspace {
 
     /// Cabeçalho do painel principal: o espaço livre arrasta a janela (duplo clique maximiza); à
     /// direita, o indicador de CPU e os botões padrão de janela.
+    /// Fio de brasa sob o cabeçalho: coral que esquenta para âmbar e some na ponta. Parado fica em brasa
+    /// baixa; com comando rodando pulsa junto com o logo da barra lateral (`ember_glow`).
+    pub fn ember_line(&self) -> impl IntoElement {
+        let a = (0.18 + 0.82 * self.ember_glow() * 0.6).clamp(0.0, 1.0);
+        let with = |c: u32, k: f32| gpui::rgba((c << 8) | (a * k * 255.0) as u32);
+        div().h(px(2.)).flex_none().w_full().bg(gpui::linear_gradient(
+            90.,
+            gpui::linear_color_stop(with(c_coral(), 1.0), 0.0),
+            gpui::linear_color_stop(with(c_amber(), 0.55), 0.55),
+        )).child(div())
+    }
+
     pub fn render_titlebar(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let maximized = window.is_maximized();
         let cpu = self.cpu_button(cx);
+        let search = self.render_gsearch(cx);
         let icon_btn = |id: &'static str, icon: &'static str, on: bool| {
             div()
                 .id(id)
@@ -139,20 +152,18 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(HOVER)))
-                .child(wicon(icon, 15., if on { TEXT } else { MUTED }))
+                .hover(|s| s.bg(rgb(c_hover())))
+                .child(wicon(icon, 15., if on { c_text() } else { c_muted() }))
         };
 
         div()
-            .h(px(TITLE_H))
+            .h(px(TITLE_H - 2.))
             .flex_none()
             .flex()
             .items_center()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .rounded_tr(px(self.corner_r))
             .when(!self.show_sidebar, |d| d.rounded_tl(px(self.corner_r)))
-            .border_b_1()
-            .border_color(rgb(DIVIDER))
             .when(!self.show_sidebar, |d| {
                 d.child(div().pl_2().child(icon_btn("toggle-sidebar", "layout-left", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.show_sidebar = true;
@@ -165,6 +176,10 @@ impl Workspace {
                     .flex_1()
                     .h_full()
                     .min_w_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(search)
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(
                         MouseButton::Left,
@@ -195,15 +210,40 @@ impl Workspace {
                     }))),
             )
             .child(cpu)
+            // configurações: ocupa a área à direita da barra lateral; clicar de novo volta
+            .child(
+                div()
+                    .id("settings-btn")
+                    .flex_none()
+                    .size(px(28.))
+                    .mr_2()
+                    .rounded_md()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(self.show_settings, |d| d.bg(rgb(c_surface())))
+                    .hover(|s| s.bg(rgb(c_hover())))
+                    .relative()
+                    .child(wicon("gear", 16., if self.show_settings { c_accent() } else { c_muted() }))
+                    // bolinha na cor do tema quando há versão nova
+                    .when(matches!(self.update, crate::update::UpdateState::Available { .. }), |d| {
+                        d.child(div().absolute().top(px(3.)).right(px(3.)).size(px(8.)).rounded_full().bg(rgb(c_accent())).border_1().border_color(rgb(c_bg())))
+                    })
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.show_settings = !this.show_settings;
+                        cx.notify();
+                    })),
+            )
             // botões padrão de janela, na ponta direita
             .child(
                 div()
                     .flex_none()
                     .h_full()
                     .flex()
-                    .child(win_btn("win-min", "—", HOVER, TEXT).on_click(cx.listener(|_, _: &ClickEvent, window, _| window.minimize_window())))
+                    .child(win_btn("win-min", "—", c_hover(), c_text()).on_click(cx.listener(|_, _: &ClickEvent, window, _| window.minimize_window())))
                     .child(
-                        win_btn("win-max", if maximized { "❐" } else { "☐" }, HOVER, TEXT)
+                        win_btn("win-max", if maximized { "❐" } else { "☐" }, c_hover(), c_text())
                             .on_click(cx.listener(|_, _: &ClickEvent, window, _| window.zoom_window())),
                     )
                     .child(win_btn("win-close", "✕", WIN_CLOSE_HOVER, 0xffffff).rounded_tr(px(self.corner_r)).on_click(cx.listener(|_, _: &ClickEvent, window, _| window.remove_window()))),
@@ -215,7 +255,7 @@ impl Workspace {
     /// divisórias entre painéis. Destacam na cor de foco ao passar o mouse.
     pub fn width_handles(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         const GRIP: f32 = 6.0;
-        let accent = rgb(AMBER);
+        let accent = rgb(c_amber());
         let handle = |id: ElementId, x: f32, y: f32, w: f32, h: f32, row: bool, kind: Resize, cx: &mut Context<Self>| {
             let active = self.resizing == Some(kind);
             div()
@@ -235,7 +275,7 @@ impl Workspace {
                         .when(!row, |d| d.top(px(h / 2.0 - 1.0)).left_0().right_0().h(px(2.)))
                         .when(active, |d| d.bg(accent)),
                 )
-                .hover(move |s| s.bg(gpui::rgba(0xe9b25f33)))
+                .hover(move |s| s.bg(gpui::rgba(c_amber_glow())))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, _, cx| {

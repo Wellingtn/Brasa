@@ -15,7 +15,7 @@ use ox_pty::{parse_prompt_row, PromptInfo, PROMPT_BRANCH, PROMPT_START, PROMPT_V
 #[cfg(test)]
 use ox_pty::{PROMPT_STATUS, PROMPT_TIME};
 
-use crate::theme::{BG, MUTED, SELECTION, TERM_BG, TERM_FG, YELLOW};
+use crate::theme::*;
 
 const ANSI: [u32; 16] = [
     // paleta do tema Dark do Warp: normais e brilhantes
@@ -458,13 +458,13 @@ impl TermView {
                 fg = bg;
             }
             if sel.is_some_and(|s| s.contains(Point::new(Line(line), Column(c)))) {
-                bg = SELECTION;
+                bg = c_selection();
                 if fg == bg {
-                    fg = TERM_FG;
+                    fg = c_term_fg();
                 }
             }
             if let Some(&(_, _, current)) = hits.iter().find(|(a, b, _)| c >= *a && c < *b) {
-                (bg, fg) = if current { (YELLOW, BG) } else { (0x4a3d12, TERM_FG) };
+                (bg, fg) = if current { (YELLOW, c_bg()) } else { (0x4a3d12, c_term_fg()) };
             }
             let (bold, underline) = (cell.flags.contains(Flags::BOLD), cell.flags.intersects(Flags::ALL_UNDERLINES));
             match runs.last_mut() {
@@ -532,22 +532,22 @@ impl TermView {
                 cursor_at = Some((ridx, row.len()));
                 std::mem::swap(&mut fg, &mut bg);
                 if fg == bg {
-                    fg = TERM_BG;
-                    bg = TERM_FG;
+                    fg = c_term_bg();
+                    bg = c_term_fg();
                 }
             }
             if cell.flags.contains(Flags::HIDDEN) {
                 fg = bg;
             }
             if selection.is_some_and(|sel| sel.contains(ic.point)) {
-                bg = SELECTION;
+                bg = c_selection();
                 if fg == bg {
-                    fg = TERM_FG;
+                    fg = c_term_fg();
                 }
             }
             let col = ic.point.column.0;
             if let Some(&(_, _, is_current)) = hits[ridx].iter().find(|(a, b, _)| col >= *a && col < *b) {
-                (bg, fg) = if is_current { (YELLOW, BG) } else { (0x4a3d12, TERM_FG) };
+                (bg, fg) = if is_current { (YELLOW, c_bg()) } else { (0x4a3d12, c_term_fg()) };
             }
             row.push(StyledCell {
                 ch: cell.c,
@@ -564,7 +564,7 @@ impl TermView {
             if text.trim_end() == prompt && idx > prompt.chars().count() {
                 for (i, ch) in hint.chars().enumerate() {
                     if let Some(cell) = grid[r].get_mut(idx + 1 + i) {
-                        (cell.ch, cell.fg) = (ch, MUTED);
+                        (cell.ch, cell.fg) = (ch, c_muted());
                     }
                 }
             }
@@ -597,8 +597,8 @@ fn resolve(color: Color) -> u32 {
         Color::Indexed(i) => indexed(i),
         Color::Named(n) => match n as usize {
             i if i < 16 => ANSI[i],
-            257 => TERM_BG, // Background
-            _ => TERM_FG,   // Foreground, Cursor, Dim*
+            257 => c_term_bg(), // Background
+            _ => c_term_fg(),   // Foreground, Cursor, Dim*
         },
     }
 }
@@ -790,7 +790,7 @@ mod tests {
         let text = |rows: &[RowView]| rows[0].runs().iter().map(|r| r.text.clone()).collect::<String>();
         let with = t.rows_to_runs(None, Some(("❯", "dica aqui")));
         assert!(text(&with).contains("dica aqui"));
-        assert!(rows_have_color(&with[0], MUTED)); // desenhada em cinza
+        assert!(rows_have_color(&with[0], c_muted())); // desenhada em cinza
 
         t.feed(b"ls");
         let typed = t.rows_to_runs(None, Some(("❯", "dica aqui")));
@@ -863,7 +863,7 @@ mod tests {
         t.update_selection_at(b.out_start, 4, true);
         assert_eq!(t.selection_text().as_deref(), Some("file1"));
         let runs = t.line_runs(b.out_start, t.selection_range(), &[]);
-        assert!(runs.iter().any(|r| r.bg == SELECTION && r.text.starts_with("file1")));
+        assert!(runs.iter().any(|r| r.bg == c_selection() && r.text.starts_with("file1")));
         assert!(t.line_runs(b.out_start + 1, None, &[(0, 4, true)]).iter().any(|r| r.bg == YELLOW));
     }
 

@@ -5,15 +5,19 @@ mod chrome;
 mod complete;
 mod files_pane;
 mod folders;
+mod gsearch;
 mod icons;
+mod keys;
 mod note_editor;
 mod pane_view;
 mod panes;
 mod scrollbar;
+mod settings;
 mod sidebar;
 mod sysmon;
 mod syntax;
 mod term_view;
+mod update;
 mod terminal;
 mod theme;
 
@@ -37,7 +41,7 @@ use ox_suggest::{Context as SuggestContext, Engine, Suggestion};
 use terminal::{key_bytes, mouse_report, Match, TermView};
 use theme::*;
 
-const DEFAULT_FONT: f32 = 15.0;
+pub const DEFAULT_FONT: f32 = 15.0;
 /// fonte da interface (a mesma do Warp)
 pub const UI_FONT: &str = "Roboto";
 /// larguras iniciais da barra lateral e do painel de notas (arrastando a borda muda)
@@ -53,7 +57,7 @@ pub const CARET_BLINK_FOR: std::time::Duration = std::time::Duration::from_secs(
 pub const STATUS_H: f32 = 30.0;
 pub const MARGIN: f32 = 8.0;
 pub const TERM_PAD: f32 = 10.0;
-const MONO_CANDIDATES: &[&str] = &["Hack", "JetBrains Mono", "JetBrainsMono Nerd Font", "DejaVu Sans Mono", "Fira Mono", "Liberation Mono"];
+pub const MONO_CANDIDATES: &[&str] = &["Hack", "JetBrains Mono", "JetBrainsMono Nerd Font", "DejaVu Sans Mono", "Fira Mono", "Liberation Mono"];
 
 const WELCOME_NOTE: &str = "# Bem-vindo à Brasa\n\n\
 > [!NOTE]\n> Digite `/` numa linha vazia para abrir o menu de blocos (títulos, listas, tarefas, comando...).\n\n\
@@ -246,14 +250,14 @@ impl Render for DragPreview {
             .px_3()
             .py(px(5.))
             .rounded_md()
-            .bg(rgb(SURFACE))
+            .bg(rgb(c_surface()))
             .border_1()
-            .border_color(rgb(AMBER))
+            .border_color(rgb(c_amber()))
             .shadow_lg()
             .font_family(UI_FONT)
             .text_size(px(14.))
-            .text_color(rgb(TEXT))
-            .child(icons::wicon(self.icon, 14., AMBER))
+            .text_color(rgb(c_text()))
+            .child(icons::wicon(self.icon, 14., c_amber()))
             .child(self.label.clone())
     }
 }
@@ -338,6 +342,42 @@ pub struct Workspace {
     pub suggestions: Vec<Suggestion>,
     pub search: Option<Search>,
     pub block_menu: Option<block_view::BlockMenu>,
+    /// janela de configurações aberta
+    pub show_settings: bool,
+    /// aba aberta nas configurações: 0 = Geral, 1 = Aparência
+    pub settings_tab: usize,
+    pub settings_field: Option<settings::SettingsField>,
+    /// arrastando o marcador da roda de cores
+    pub wheel_drag: bool,
+    pub font_query: String,
+    /// texto editável da pré-visualização da fonte (aba Aparência)
+    pub preview_text: String,
+    /// posição do cursor (em caracteres) no texto da pré-visualização
+    pub preview_caret: usize,
+    /// arrastando o marcador do tamanho da fonte
+    pub size_drag: bool,
+    /// resultado da verificação de nova versão
+    pub update: update::UpdateState,
+    pub keymap: keys::Keymap,
+    /// ação cujo atalho está sendo gravado nas configurações (próxima tecla vira o atalho)
+    pub rebinding: Option<keys::Action>,
+    pub keys_notice: Option<String>,
+    /// busca global da barra superior
+    pub gsearch: String,
+    pub gsearch_focused: bool,
+    pub gsearch_sel: usize,
+    /// medidor de latência do teclado: instante da tecla enviada ao shell, se já chegou eco e as últimas medidas (ms)
+    pub key_sent: Option<std::time::Instant>,
+    pub echo_seen: bool,
+    pub latency_ms: std::collections::VecDeque<f32>,
+    /// deslocamento da pré-visualização (colunas, linhas): a "câmera" segue o cursor
+    pub preview_scroll: (usize, usize),
+    /// largura e altura da área de texto da pré-visualização (f32 em bits), medidas ao desenhar
+    pub preview_size: Arc<[std::sync::atomic::AtomicU32; 2]>,
+    pub accent_hex: String,
+    pub bg_hex: String,
+    /// fontes de largura fixa instaladas (calculado na primeira vez que a aba Aparência abre)
+    pub mono_fonts: Option<Vec<String>>,
     /// cartão de completar caminhos aberto pelo Tab
     pub completion: Option<CompletionMenu>,
     /// CPU, memória e processos (indicador do cabeçalho e painel de desempenho)
@@ -382,7 +422,7 @@ pub fn config_dir() -> PathBuf {
 
 /// `BRASA_PROMPT=texto` troca o texto (vazio = sem prompt); `BRASA_PROMPT=native` mantém o do shell.
 fn prompt_config() -> Option<PromptConfig> {
-    let color = Some((0xb3, 0x92, 0xf0)); // ACCENT
+    let color = Some((0xb3, 0x92, 0xf0)); // c_accent()
     match app_env("PROMPT") {
         Ok(v) if v == "native" => None,
         Ok(v) => Some(PromptConfig { text: v, color }),
@@ -419,7 +459,7 @@ pub fn small_btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> St
         .text_xs()
         .rounded_sm()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(HOVER)))
+        .hover(|s| s.bg(rgb(c_hover())))
         .child(label.into())
 }
 
@@ -432,8 +472,8 @@ pub fn soft_btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Sta
         .text_sm()
         .rounded_md()
         .cursor_pointer()
-        .bg(rgb(SURFACE))
-        .hover(|s| s.bg(rgb(BTN_HOVER)))
+        .bg(rgb(c_surface()))
+        .hover(|s| s.bg(rgb(c_btn_hover())))
         .child(label.into())
 }
 
@@ -446,8 +486,8 @@ pub fn primary_btn(id: impl Into<ElementId>, label: impl Into<SharedString>) -> 
         .text_xs()
         .rounded_sm()
         .cursor_pointer()
-        .bg(rgb(RUN_BG))
-        .hover(|s| s.bg(rgb(RUN_HOVER)))
+        .bg(rgb(c_run_bg()))
+        .hover(|s| s.bg(rgb(c_run_hover())))
         .child(label.into())
 }
 
@@ -494,7 +534,10 @@ impl Workspace {
             .unwrap_or("monospace")
             .to_string()
             .into();
-        let (cell_w, cell_h) = measure(window, &mono, DEFAULT_FONT);
+        let (saved_font, saved_size) = settings::load();
+        let mono: SharedString = saved_font.filter(|f| fonts.iter().any(|x| x == f)).map(Into::into).unwrap_or(mono);
+        let start_size = saved_size.unwrap_or(DEFAULT_FONT).clamp(9.0, 32.0);
+        let (cell_w, cell_h) = measure(window, &mono, start_size);
         let ed_cell = measure(window, &mono, ED_FONT);
 
         // fila limitada: se a tela não acompanha, o leitor do PTY espera e o programa (ex.: `cat`) desacelera,
@@ -582,7 +625,7 @@ impl Workspace {
             mono,
             icon_font: icons::find_icon_font(&fonts),
             prompt_text: prompt_config().map(|p| p.text),
-            font_size: DEFAULT_FONT,
+            font_size: start_size,
             cell_w,
             cell_h,
             pty: Arc::new(PtyManager::new()),
@@ -634,6 +677,29 @@ impl Workspace {
             suggestions: Vec::new(),
             search: None,
             block_menu: None,
+            show_settings: false,
+            settings_tab: 0,
+            settings_field: None,
+            wheel_drag: false,
+            font_query: String::new(),
+            preview_text: settings::DEFAULT_PREVIEW.to_string(),
+            preview_caret: 0,
+            size_drag: false,
+            update: update::UpdateState::Unknown,
+            keymap: keys::Keymap::load(),
+            rebinding: None,
+            keys_notice: None,
+            gsearch: String::new(),
+            gsearch_focused: false,
+            gsearch_sel: 0,
+            key_sent: None,
+            echo_seen: false,
+            latency_ms: std::collections::VecDeque::new(),
+            preview_scroll: (0, 0),
+            preview_size: Arc::new([std::sync::atomic::AtomicU32::new(0), std::sync::atomic::AtomicU32::new(0)]),
+            accent_hex: theme::hex_string(theme::custom_accent()),
+            bg_hex: theme::hex_string(theme::custom_bg()),
+            mono_fonts: None,
             completion: None,
             monitor: sysmon::Monitor::new(),
             mon: pane_view::MonitorUi::default(),
@@ -673,6 +739,9 @@ impl Workspace {
                 }
             })
             .detach();
+        }
+        if settings::updates_enabled() {
+            ws.check_updates(cx);
         }
         ws
     }
@@ -861,6 +930,9 @@ impl Workspace {
         let Some(idx) = self.tabs.iter().position(|t| t.session == id) else { return };
         match msg {
             PtyMsg::Output(bytes) => {
+                if self.key_sent.is_some() && idx == self.active {
+                    self.echo_seen = true;
+                }
                 let tab = &mut self.tabs[idx];
                 for reply in tab.term.feed(&bytes) {
                     let _ = self.pty.write(id, reply.as_bytes());
@@ -944,9 +1016,50 @@ impl Workspace {
         }
     }
 
+    /// Executa a ação de um atalho.
+    fn run_action(&mut self, action: keys::Action, window: &mut Window, cx: &mut Context<Self>) {
+        use keys::Action::*;
+        match action {
+            Search => {
+                self.focus_editor = false;
+                self.search = Some(self::Search { query: String::new(), matches: Vec::new(), current: 0 });
+            }
+            Copy => self.copy_selection(cx),
+            Paste => self.paste_clipboard(cx),
+            NewTab => self.new_tab(Some(self.shell_cwd.clone())),
+            CloseTab => self.close_tab(self.active),
+            PrevTab => self.switch_tab((self.active + self.tabs.len() - 1) % self.tabs.len()),
+            NextTab => self.switch_tab((self.active + 1) % self.tabs.len()),
+            ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            ToggleNotes => self.show_notes = !self.show_notes,
+            SplitRight => self.split_new(true),
+            SplitDown => self.split_new(false),
+            ClosePane => self.close_pane(PaneKind::Term(self.session())),
+            Performance => self.toggle_widget(PaneKind::Procs),
+            ZoomIn => self.set_font_size(self.font_size + 1.0, window),
+            ZoomOut => self.set_font_size(self.font_size - 1.0, window),
+            ZoomReset => self.set_font_size(DEFAULT_FONT, window),
+            Settings => self.show_settings = !self.show_settings,
+            GlobalSearch => {
+                self.gsearch_focused = true;
+                self.filter_focused = false;
+                self.focus_editor = false;
+            }
+        }
+        cx.notify();
+    }
+
     pub fn set_font_size(&mut self, size: f32, window: &Window) {
         self.font_size = size.clamp(9.0, 32.0);
         (self.cell_w, self.cell_h) = measure(window, &self.mono, self.font_size);
+        settings::save(&self.mono, self.font_size);
+    }
+
+    pub fn set_mono(&mut self, family: &str, window: &Window) {
+        self.mono = family.to_string().into();
+        (self.cell_w, self.cell_h) = measure(window, &self.mono, self.font_size);
+        self.ed_cell_w = measure(window, &self.mono, ED_FONT).0;
+        settings::save(&self.mono, self.font_size);
     }
 
     // ----- entrada do terminal -----
@@ -988,6 +1101,16 @@ impl Workspace {
         let m = &k.modifiers;
         let key = k.key.to_lowercase();
 
+        // com a página de configurações aberta, as teclas são dela, a menos que se esteja digitando na barra lateral
+        let typing_in_sidebar = self.naming.is_some() || self.filter_focused || self.title_focused;
+        if self.show_settings && !typing_in_sidebar && self.on_settings_key(k, cx) {
+            return;
+        }
+
+        if self.gsearch_focused && self.on_gsearch_key(k, cx) {
+            return;
+        }
+
         if self.naming.is_some() {
             self.on_naming_key(k, cx);
             return;
@@ -1022,47 +1145,19 @@ impl Workspace {
             return;
         }
 
-        if self.search.is_some() && !(m.control && m.shift && key == "f") {
+        let action = self.keymap.lookup(k);
+        if self.search.is_some() && action != Some(keys::Action::Search) {
             self.on_search_key(k, cx);
             return;
         }
 
-        if m.control && m.shift {
-            match key.as_str() {
-                "f" => {
-                    self.focus_editor = false;
-                    self.search = Some(Search { query: String::new(), matches: Vec::new(), current: 0 });
-                }
-                "c" => self.copy_selection(cx),
-                "v" => self.paste_clipboard(cx),
-                "t" => self.new_tab(Some(self.shell_cwd.clone())),
-                "w" => self.close_tab(self.active),
-                "e" => self.show_sidebar = !self.show_sidebar,
-                "n" => self.show_notes = !self.show_notes,
-                // painéis: dividir lado a lado / embaixo, fechar o painel em foco, desempenho
-                "d" => self.split_new(true),
-                "b" => self.split_new(false),
-                "x" => self.close_pane(PaneKind::Term(self.session())),
-                "m" => self.toggle_widget(PaneKind::Procs),
-                "left" => self.switch_tab((self.active + self.tabs.len() - 1) % self.tabs.len()),
-                "right" => self.switch_tab((self.active + 1) % self.tabs.len()),
-                _ => return,
-            }
-            cx.notify();
+        if let Some(action) = action {
+            self.run_action(action, window, cx);
             return;
         }
-        if m.control && !m.alt {
-            let zoom = match key.as_str() {
-                "=" | "+" => Some(self.font_size + 1.0),
-                "-" => Some(self.font_size - 1.0),
-                "0" => Some(DEFAULT_FONT),
-                _ => None,
-            };
-            if let Some(size) = zoom {
-                self.set_font_size(size, window);
-                cx.notify();
-                return;
-            }
+        // Ctrl+Shift+tecla sem ação não vai para o terminal
+        if m.control && m.shift {
+            return;
         }
 
         // cartão de completar: setas escolhem, Enter/Tab completam, Esc fecha
@@ -1101,9 +1196,29 @@ impl Workspace {
         tab.term.clear_selection();
         tab.term.scroll_to_bottom();
         tab.follow = true;
+        // latência: só uma medida por vez; uma tecla sem eco há mais de 1 s é esquecida
+        if self.key_sent.map_or(true, |t| t.elapsed() > std::time::Duration::from_secs(1)) {
+            self.key_sent = Some(std::time::Instant::now());
+            self.echo_seen = false;
+        }
         let _ = self.pty.write(self.session(), &bytes);
         self.refresh_suggestions();
         cx.notify();
+    }
+
+    /// Chamado a cada desenho: se o eco da última tecla já chegou, registra o tempo desde a tecla.
+    fn note_latency(&mut self) {
+        if let (Some(t), true) = (self.key_sent, self.echo_seen) {
+            let ms = t.elapsed().as_secs_f32() * 1000.0;
+            if ms < 500.0 {
+                if self.latency_ms.len() >= 200 {
+                    self.latency_ms.pop_front();
+                }
+                self.latency_ms.push_back(ms);
+            }
+            self.key_sent = None;
+            self.echo_seen = false;
+        }
     }
 
     /// Tab no modo em blocos: abre o cartão com as pastas/arquivos que combinam com a palavra sob o
@@ -1797,17 +1912,23 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_size(window);
+        self.note_latency();
         let maximized = window.is_maximized();
         // cantos arredondados sempre (também maximizada); as partes encostadas nos cantos se arredondam
         // junto, porque o recorte do GPUI é retangular e o fundo delas cobriria a curva
         let radius = WINDOW_RADIUS;
         self.corner_r = radius - 1.0;
 
+        // brasa respirando: pede o próximo quadro só enquanto há comando rodando (parado não gasta nada)
+        if self.tabs.iter().any(|t| !t.cmd_starts.is_empty()) {
+            window.request_animation_frame();
+        }
         let titlebar = self.render_titlebar(window, cx);
         let sidebar = self.show_sidebar.then(|| self.render_sidebar(cx));
         let terminal = self.render_panes(cx);
         let widgets = self.render_widget_bar(cx);
         let notes = self.show_notes.then(|| self.render_notes(window, cx));
+        let settings_page = self.show_settings.then(|| self.render_settings(window, cx));
 
         // a barra lateral vai até o topo; o cabeçalho pertence só ao painel principal
         let r = px(self.corner_r);
@@ -1817,17 +1938,21 @@ impl Render for Workspace {
             .h_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .rounded_r(r)
             .when(!self.show_sidebar, |d| d.rounded_l(r))
             .child(titlebar)
-            .child(div().flex_1().min_h_0().flex().flex_row().when_some(notes, |d, n| d.child(n)).child(terminal).child(widgets));
+            .child(self.ember_line())
+            .child(match settings_page {
+                Some(page) => page,
+                None => div().flex_1().min_h_0().flex().flex_row().when_some(notes, |d, n| d.child(n)).child(terminal).child(widgets).into_any_element(),
+            });
 
         div()
             .size_full()
             .relative()
             .font_family(UI_FONT)
-            .text_color(rgb(TEXT))
+            .text_color(rgb(c_text()))
             .text_size(px(15.))
             .track_focus(&self.focus)
             .key_context("Brasa")
@@ -1841,6 +1966,8 @@ impl Render for Workspace {
                     this.title_focused = false;
                     this.block_menu = None;
                     this.mon.filter_focused = false;
+                    this.settings_field = None;
+                    this.close_gsearch();
                 }),
             )
             .child(
@@ -1850,7 +1977,7 @@ impl Render for Workspace {
                     .flex_row()
                     .rounded(px(radius))
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(c_border()))
                     .overflow_hidden()
                     .when_some(sidebar, |d, s| d.child(s))
                     .child(main_pane),
@@ -1892,6 +2019,7 @@ fn main() {
     Application::new().with_assets(assets::Assets).run(|cx: &mut App| {
         // fontes do Warp: Hack (terminal/código) e Roboto (interface e texto das notas)
         let _ = cx.text_system().add_fonts(assets::fonts());
+        theme::load_accent();
         let bounds = Bounds::centered(None, size(px(1500.), px(900.)), cx);
         cx.open_window(
             WindowOptions {

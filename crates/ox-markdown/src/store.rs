@@ -26,6 +26,15 @@ pub struct NoteMeta {
     pub modified_unix: u64,
 }
 
+/// Resultado de uma busca nas notas: pelo nome ou por uma linha do conteúdo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteHit {
+    /// caminho relativo, com `.md`
+    pub name: String,
+    /// primeira linha do conteúdo que contém o termo (vazio quando só o nome combina)
+    pub snippet: String,
+}
+
 /// Linha da árvore de notas, na ordem de exibição.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteNode {
@@ -111,6 +120,32 @@ impl NoteStore {
             }
         }
         Ok(())
+    }
+
+    /// Busca sem diferenciar maiúsculas: primeiro as notas cujo nome combina, depois as que têm o termo no
+    /// conteúdo (com a primeira linha encontrada). Dentro de cada grupo, as mais recentes primeiro.
+    pub fn search(&self, query: &str) -> Result<Vec<NoteHit>, StoreError> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        let (mut by_name, mut by_text) = (Vec::new(), Vec::new());
+        for meta in self.list()? {
+            let snippet = self.read(&meta.name).ok().and_then(|text| {
+                text.lines().find(|l| l.to_lowercase().contains(&q)).map(|l| {
+                    let l = l.trim();
+                    let cut: String = l.chars().take(90).collect();
+                    if cut.len() < l.len() { format!("{cut}…") } else { cut }
+                })
+            });
+            if meta.name.to_lowercase().contains(&q) {
+                by_name.push(NoteHit { name: meta.name, snippet: snippet.unwrap_or_default() });
+            } else if let Some(snippet) = snippet {
+                by_text.push(NoteHit { name: meta.name, snippet });
+            }
+        }
+        by_name.extend(by_text);
+        Ok(by_name)
     }
 
     /// Árvore para a barra lateral: pastas primeiro, ordem alfabética; só desce nas pastas em `expanded`.
@@ -253,6 +288,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = NoteStore::new(dir.path()).unwrap();
         (dir, s)
+    }
+
+    #[test]
+    fn search_finds_notes_by_name_and_by_content() {
+        let (_d, s) = store();
+        s.write("receitas", "# Bolo\nmisture a Farinha com ovos\n").unwrap();
+        s.write("farinha-de-trigo", "só o nome combina aqui").unwrap();
+        s.write("tarefas", "comprar leite\n").unwrap();
+        let hits = s.search("farinha").unwrap();
+        // nome primeiro, depois conteúdo; sem diferenciar maiúsculas
+        assert_eq!(hits.iter().map(|h| h.name.as_str()).collect::<Vec<_>>(), ["farinha-de-trigo.md", "receitas.md"]);
+        assert_eq!(hits[0].snippet, "");
+        assert_eq!(hits[1].snippet, "misture a Farinha com ovos");
+        assert!(s.search("  ").unwrap().is_empty());
+        assert!(s.search("inexistente").unwrap().is_empty());
+        // limita o trecho
+        s.write("longa", &format!("{} agulha", "x".repeat(200))).unwrap();
+        assert!(s.search("agulha").unwrap()[0].snippet.ends_with('…'));
     }
 
     #[test]

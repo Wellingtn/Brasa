@@ -70,7 +70,7 @@ fn load_color(pct: f32) -> u32 {
     } else if pct < 80.0 {
         YELLOW
     } else {
-        CORAL
+        c_coral()
     }
 }
 
@@ -118,7 +118,7 @@ fn chart_glyph(color: u32) -> impl IntoElement {
 
 /// Olho (mostrar ocultos); riscado quando os ocultos estão escondidos, como no Wave.
 fn eye_glyph(struck: bool) -> Div {
-    div().relative().size(px(16.)).flex().items_center().justify_center().child(wicon("eye", 15., MUTED)).when(struck, |d| {
+    div().relative().size(px(16.)).flex().items_center().justify_center().child(wicon("eye", 15., c_muted())).when(struck, |d| {
         d.child(
             canvas(
                 |_, _, _| {},
@@ -127,7 +127,7 @@ fn eye_glyph(struck: bool) -> Div {
                     pb.move_to(point(b.origin.x + px(2.), b.origin.y + px(2.)));
                     pb.line_to(point(b.origin.x + b.size.width - px(2.), b.origin.y + b.size.height - px(2.)));
                     if let Ok(path) = pb.build() {
-                        window.paint_path(path, rgb(MUTED));
+                        window.paint_path(path, rgb(c_muted()));
                     }
                 },
             )
@@ -178,7 +178,7 @@ fn head_btn(id: impl Into<gpui::ElementId>) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(BTN_HOVER)))
+        .hover(|s| s.bg(rgb(c_btn_hover())))
 }
 
 /// Gráfico de linha com área preenchida, eixo Y (0–100 %) e marcas de tempo, como o sysinfo do Wave.
@@ -243,7 +243,7 @@ fn line_chart(values: Vec<f32>, color: u32, w: f32, h: f32, unit: &str) -> Div {
     .w(px(plot_w))
     .h(px(plot_h));
 
-    let label = |text: String| div().absolute().text_size(px(11.)).text_color(rgb(MUTED)).whitespace_nowrap().child(text);
+    let label = |text: String| div().absolute().text_size(px(11.)).text_color(rgb(c_muted())).whitespace_nowrap().child(text);
     div()
         .relative()
         .w(px(w))
@@ -264,8 +264,8 @@ impl Workspace {
     /// Cor do contorno do painel em foco: a da seção ativa na barra lateral.
     fn focus_color(&self) -> u32 {
         match self.side {
-            Side::Terminals => CORAL,
-            Side::Notes => AMBER,
+            Side::Terminals => c_coral(),
+            Side::Notes => c_amber(),
         }
     }
 
@@ -325,7 +325,7 @@ impl Workspace {
                 PaneKind::Procs => usize::MAX - 2,
                 PaneKind::Files => usize::MAX - 3,
             };
-            let icon_color = if running { CORAL } else if is_focus { accent } else { MUTED };
+            let icon_color = if running { c_coral() } else if is_focus { accent } else { c_muted() };
             let header = div()
                 .id(("pane-head", pane_id))
                 .flex_none()
@@ -334,11 +334,11 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap_2()
-                .bg(rgb(PANEL))
+                .bg(rgb(c_panel()))
                 .border_b_1()
-                .border_color(rgb(CARD_BORDER))
+                .border_color(rgb(c_card_border()))
                 .when(kind == PaneKind::Files, |d| {
-                    d.child(head_btn("files-back").child(wicon("arrow-left", 14., MUTED)).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    d.child(head_btn("files-back").child(wicon("arrow-left", 14., c_muted())).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         if let Some(f) = this.files.as_mut() {
                             f.go_back();
                         }
@@ -357,17 +357,17 @@ impl Workspace {
                         .text_size(px(13.))
                         .when(kind.is_widget() && kind != PaneKind::Files, |d| d.font_weight(FontWeight::SEMIBOLD))
                         .when(kind == PaneKind::Files, |d| d.font_family(self.mono.clone()).text_size(px(12.)))
-                        .text_color(rgb(if is_focus { TEXT } else { MUTED }))
+                        .text_color(rgb(if is_focus { c_text() } else { c_muted() }))
                         .child(title),
                 )
                 .when(matches!(kind, PaneKind::Term(_)), |d| {
                     let PaneKind::Term(sid) = kind else { unreachable!() };
-                    d.child(head_btn(("pane-split-r", pane_id)).child(split_glyph(true, MUTED)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    d.child(head_btn(("pane-split-r", pane_id)).child(split_glyph(true, c_muted())).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.focus_pane(sid);
                         this.split_new(true);
                         cx.notify();
                     })))
-                    .child(head_btn(("pane-split-d", pane_id)).child(split_glyph(false, MUTED)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    .child(head_btn(("pane-split-d", pane_id)).child(split_glyph(false, c_muted())).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.focus_pane(sid);
                         this.split_new(false);
                         cx.notify();
@@ -382,14 +382,14 @@ impl Workspace {
                         }
                         cx.notify();
                     })))
-                    .child(head_btn("files-refresh").child(wicon("refresh", 13., MUTED)).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    .child(head_btn("files-refresh").child(wicon("refresh", 13., c_muted())).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         if let Some(f) = this.files.as_mut() {
                             f.reload();
                         }
                         cx.notify();
                     })))
                 })
-                .child(head_btn(("pane-close", pane_id)).child(wicon("x-close", 13., MUTED)).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                .child(head_btn(("pane-close", pane_id)).child(wicon("x-close", 13., c_muted())).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.close_pane(kind);
                     cx.notify();
                 })));
@@ -405,8 +405,8 @@ impl Workspace {
                     .flex_col()
                     .rounded(px(8.))
                     .border(px(PANE_BORDER))
-                    .border_color(rgb(if is_focus { accent } else { CARD_BORDER }))
-                    .bg(rgb(BG))
+                    .border_color(rgb(if is_focus { accent } else { c_card_border() }))
+                    .bg(rgb(c_bg()))
                     .overflow_hidden()
                     // clicar em qualquer ponto do painel o põe em foco
                     .on_mouse_down(
@@ -432,7 +432,7 @@ impl Workspace {
             .flex_1()
             .min_w_0()
             .h_full()
-            .bg(rgb(if multi { 0x0f0b0b } else { BG }))
+            .bg(rgb(if multi { c_deep_bg() } else { c_bg() }))
             .children(out)
             .into_any_element()
     }
@@ -459,10 +459,10 @@ impl Workspace {
                 .gap(px(4.))
                 .rounded_md()
                 .cursor_pointer()
-                .when(open, |d| d.bg(rgb(SURFACE)))
-                .when(!open, |d| d.hover(|s| s.bg(rgb(HOVER))))
-                .child(div().h(px(18.)).flex().items_center().child(widget_glyph(kind, if open { color } else { MUTED })))
-                .child(div().text_size(px(11.)).text_color(rgb(if open { TEXT } else { MUTED })).child(widget_title(kind)))
+                .when(open, |d| d.bg(rgb(c_surface())))
+                .when(!open, |d| d.hover(|s| s.bg(rgb(c_hover()))))
+                .child(div().h(px(18.)).flex().items_center().child(widget_glyph(kind, if open { color } else { c_muted() })))
+                .child(div().text_size(px(11.)).text_color(rgb(if open { c_text() } else { c_muted() })).child(widget_title(kind)))
         };
         let open = |k: PaneKind| self.panes.contains(k);
         div()
@@ -474,19 +474,19 @@ impl Workspace {
             .items_center()
             .gap_1()
             .pt_2()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .rounded_br(px(self.corner_r))
             .border_l_1()
-            .border_color(rgb(DIVIDER))
+            .border_color(rgb(c_divider()))
             .child(item("w-files", PaneKind::Files, open(PaneKind::Files), FILES_BLUE).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.toggle_widget(PaneKind::Files);
                 cx.notify();
             })))
-            .child(item("w-cpu", PaneKind::Cpu, open(PaneKind::Cpu), PEACH).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            .child(item("w-cpu", PaneKind::Cpu, open(PaneKind::Cpu), c_peach()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.toggle_widget(PaneKind::Cpu);
                 cx.notify();
             })))
-            .child(item("w-mem", PaneKind::Mem, open(PaneKind::Mem), AMBER).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+            .child(item("w-mem", PaneKind::Mem, open(PaneKind::Mem), c_amber()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.toggle_widget(PaneKind::Mem);
                 cx.notify();
             })))
@@ -509,14 +509,14 @@ impl Workspace {
             .items_baseline()
             .gap(px(10.))
             .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(color)).child(value))
-            .child(div().min_w_0().truncate().text_size(px(12.)).text_color(rgb(MUTED)).child(detail))
+            .child(div().min_w_0().truncate().text_size(px(12.)).text_color(rgb(c_muted())).child(detail))
     }
 
     fn render_cpu(&self, r: Rect) -> AnyElement {
         let m = &self.monitor;
         let summary = self.chart_summary(
             format!("{:.0}%", m.cpu),
-            PEACH,
+            c_peach(),
             format!("{} núcleos · carga {:.2} {:.2} {:.2}", m.cores.len().max(1), m.load.0, m.load.1, m.load.2),
         );
         div()
@@ -524,9 +524,9 @@ impl Workspace {
             .flex()
             .flex_col()
             .pt_2()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .child(summary)
-            .child(line_chart(m.cpu_hist.iter().copied().collect(), PEACH, r.w - 12.0, (r.h - 34.0 - 16.0).max(60.0), "%"))
+            .child(line_chart(m.cpu_hist.iter().copied().collect(), c_peach(), r.w - 12.0, (r.h - 34.0 - 16.0).max(60.0), "%"))
             .into_any_element()
     }
 
@@ -538,15 +538,15 @@ impl Workspace {
         } else {
             String::new()
         };
-        let summary = self.chart_summary(format!("{pct:.0}%"), AMBER, format!("{} de {}{swap}", human_bytes(m.mem_used_kb * 1024), human_bytes(m.mem_total_kb * 1024)));
+        let summary = self.chart_summary(format!("{pct:.0}%"), c_amber(), format!("{} de {}{swap}", human_bytes(m.mem_used_kb * 1024), human_bytes(m.mem_total_kb * 1024)));
         div()
             .size_full()
             .flex()
             .flex_col()
             .pt_2()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .child(summary)
-            .child(line_chart(m.mem_hist.iter().copied().collect(), AMBER, r.w - 12.0, (r.h - 34.0 - 16.0).max(60.0), "%"))
+            .child(line_chart(m.mem_hist.iter().copied().collect(), c_amber(), r.w - 12.0, (r.h - 34.0 - 16.0).max(60.0), "%"))
             .into_any_element()
     }
 
@@ -570,8 +570,8 @@ impl Workspace {
         let mono = self.mono.clone();
 
         // resumo: carga, memória, núcleos e uso total; à direita, contagem e lupa
-        let sep = || div().w(px(1.)).h(px(12.)).bg(rgb(CARD_BORDER));
-        let kv = |k: &str, v: String| div().flex().gap(px(6.)).child(div().text_color(rgb(MUTED)).child(k.to_string())).child(div().text_color(rgb(TEXT)).child(v));
+        let sep = || div().w(px(1.)).h(px(12.)).bg(rgb(c_card_border()));
+        let kv = |k: &str, v: String| div().flex().gap(px(6.)).child(div().text_color(rgb(c_muted())).child(k.to_string())).child(div().text_color(rgb(c_text())).child(v));
         let summary = div()
             .flex_none()
             .h(px(26.))
@@ -580,7 +580,7 @@ impl Workspace {
             .items_center()
             .gap(px(10.))
             .border_b_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .font_family(mono.clone())
             .text_size(px(12.))
             .overflow_hidden()
@@ -602,10 +602,10 @@ impl Workspace {
                     .items_center()
                     .rounded(px(4.))
                     .border_1()
-                    .border_color(rgb(CARD_BORDER))
-                    .text_color(rgb(MUTED))
+                    .border_color(rgb(c_card_border()))
+                    .text_color(rgb(c_muted()))
                     .cursor_pointer()
-                    .hover(|s| s.text_color(rgb(TEXT)).bg(rgb(HOVER)))
+                    .hover(|s| s.text_color(rgb(c_text())).bg(rgb(c_hover())))
                     .child(format!("⟳ {} s", self.mon.interval_secs))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.mon.interval_secs = match this.mon.interval_secs {
@@ -619,8 +619,8 @@ impl Workspace {
             .child(kv("Procs", total.to_string()))
             .child(
                 head_btn("mon-search")
-                    .when(self.mon.search_open, |d| d.bg(rgb(SURFACE)))
-                    .child(wicon("search", 13., if self.mon.search_open { TEXT } else { MUTED }))
+                    .when(self.mon.search_open, |d| d.bg(rgb(c_surface())))
+                    .child(wicon("search", 13., if self.mon.search_open { c_text() } else { c_muted() }))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.mon.search_open = !this.mon.search_open;
                         this.mon.filter_focused = this.mon.search_open;
@@ -639,7 +639,7 @@ impl Workspace {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .child(
                 div()
                     .id("mon-filter")
@@ -651,14 +651,14 @@ impl Workspace {
                     .gap_2()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(if focused { ACCENT } else { CARD_BORDER }))
+                    .border_color(rgb(if focused { c_accent() } else { c_card_border() }))
                     .text_size(px(13.))
                     .child(if self.mon.filter.is_empty() {
-                        div().text_color(rgb(DISABLED)).child("Filtrar por nome, PID ou usuário")
+                        div().text_color(rgb(c_disabled())).child("Filtrar por nome, PID ou usuário")
                     } else {
                         div().flex_1().min_w_0().truncate().child(format!("{}{}", self.mon.filter, if focused { "▏" } else { "" }))
                     })
-                    .child(div().flex_none().text_size(px(12.)).text_color(rgb(DISABLED)).child(if filter.is_empty() { String::new() } else { format!("{} de {total}", procs.len()) }))
+                    .child(div().flex_none().text_size(px(12.)).text_color(rgb(c_disabled())).child(if filter.is_empty() { String::new() } else { format!("{} de {total}", procs.len()) }))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -702,10 +702,10 @@ impl Workspace {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .text_size(px(12.5))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(rgb(MUTED))
+            .text_color(rgb(c_muted()))
             .children(cols.iter().enumerate().map(|(i, (label, key, w, right))| {
                 let key = *key;
                 let sortable = *label != "Status";
@@ -720,8 +720,8 @@ impl Workspace {
                 cell(*w, *right)
                     .id(("mon-col", i))
                     .h_full()
-                    .when(active, |d| d.text_color(rgb(TEXT)))
-                    .when(sortable, |d| d.cursor_pointer().hover(|s| s.text_color(rgb(TEXT))))
+                    .when(active, |d| d.text_color(rgb(c_text())))
+                    .when(sortable, |d| d.cursor_pointer().hover(|s| s.text_color(rgb(c_text()))))
                     .child(format!("{label}{arrow}"))
                     .when(sortable, |d| {
                         d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -750,21 +750,21 @@ impl Workspace {
                 .font_family(mono.clone())
                 .text_size(px(12.5))
                 .cursor_pointer()
-                .when(sel, |d| d.bg(rgb(SURFACE)))
-                .when(!sel, |d| d.hover(|s| s.bg(rgb(HOVER))))
-                .child(cell(Some(70.0), true).text_color(rgb(MUTED)).child(pid.to_string()))
-                .child(cell(None, false).text_color(rgb(TEXT)).child(p.name.clone()))
+                .when(sel, |d| d.bg(rgb(c_surface())))
+                .when(!sel, |d| d.hover(|s| s.bg(rgb(c_hover()))))
+                .child(cell(Some(70.0), true).text_color(rgb(c_muted())).child(pid.to_string()))
+                .child(cell(None, false).text_color(rgb(c_text())).child(p.name.clone()))
                 .when(!narrow, |d| {
-                    d.child(cell(Some(80.0), false).text_size(px(11.5)).text_color(rgb(if p.state == 'R' { TEAL } else if p.state == 'Z' { RED } else { MUTED })).child(sysmon::state_label(p.state)))
-                        .child(cell(Some(100.0), false).text_color(rgb(MUTED)).child(p.user.clone()))
-                        .child(cell(Some(40.0), true).text_color(rgb(MUTED)).child(p.threads.to_string()))
+                    d.child(cell(Some(80.0), false).text_size(px(11.5)).text_color(rgb(if p.state == 'R' { TEAL } else if p.state == 'Z' { RED } else { c_muted() })).child(sysmon::state_label(p.state)))
+                        .child(cell(Some(100.0), false).text_color(rgb(c_muted())).child(p.user.clone()))
+                        .child(cell(Some(40.0), true).text_color(rgb(c_muted())).child(p.threads.to_string()))
                 })
-                .child(cell(Some(70.0), true).text_color(rgb(if p.cpu >= 1.0 { load_color(p.cpu.min(100.0)) } else { TEXT })).child(if p.cpu >= 10.0 {
+                .child(cell(Some(70.0), true).text_color(rgb(if p.cpu >= 1.0 { load_color(p.cpu.min(100.0)) } else { c_text() })).child(if p.cpu >= 10.0 {
                     format!("{:.1}%", p.cpu)
                 } else {
                     format!("{:.2}%", p.cpu)
                 }))
-                .child(cell(Some(76.0), true).text_color(rgb(TEXT)).child(short_bytes(p.mem_bytes)))
+                .child(cell(Some(76.0), true).text_color(rgb(c_text())).child(short_bytes(p.mem_bytes)))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.mon.selected = Some(pid);
                     this.mon.menu = None;
@@ -808,10 +808,10 @@ impl Workspace {
                 let track = visible as f32 * ROW_H;
                 let len = (track * visible as f32 / scroll_total as f32).max(24.0);
                 let top = (track - len) * first as f32 / (scroll_total - visible) as f32;
-                d.child(div().absolute().right(px(2.)).top(px(top)).w(px(5.)).h(px(len)).rounded_full().bg(rgb(BTN_HOVER)))
+                d.child(div().absolute().right(px(2.)).top(px(top)).w(px(5.)).h(px(len)).rounded_full().bg(rgb(c_btn_hover())))
             })
             .when(procs.is_empty(), |d| {
-                d.child(div().p_3().text_size(px(13.)).text_color(rgb(MUTED)).child(if total == 0 { "Lendo processos…" } else { "Nenhum processo combina com o filtro." }))
+                d.child(div().p_3().text_size(px(13.)).text_color(rgb(c_muted())).child(if total == 0 { "Lendo processos…" } else { "Nenhum processo combina com o filtro." }))
             });
 
         let menu = self.mon.menu.map(|(pid, mx, my)| self.render_proc_menu(pid, mx.min(r.w - 230.0).max(4.0), my.min(r.h - 250.0).max(4.0), cx));
@@ -821,7 +821,7 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -847,9 +847,9 @@ impl Workspace {
                 .py(px(6.))
                 .rounded(px(4.))
                 .text_size(px(13.))
-                .text_color(rgb(if danger { RED } else { TEXT }))
+                .text_color(rgb(if danger { RED } else { c_text() }))
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(HOVER)))
+                .hover(|s| s.bg(rgb(c_hover())))
                 .child(label)
         };
         let signal = move |this: &mut Workspace, sig: &'static str, verb: &str| {
@@ -868,21 +868,21 @@ impl Workspace {
             .w(px(220.))
             .p_1()
             .rounded(px(6.))
-            .bg(rgb(PANEL))
+            .bg(rgb(c_panel()))
             .border_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .shadow_lg()
             .flex()
             .flex_col()
             .on_mouse_down(MouseButton::Left, cx.listener(|_, _: &MouseDownEvent, _, cx| cx.stop_propagation()))
-            .child(div().px_3().py_1().text_size(px(12.)).text_color(rgb(DISABLED)).truncate().child(format!("{pid} · {name}")))
+            .child(div().px_3().py_1().text_size(px(12.)).text_color(rgb(c_disabled())).truncate().child(format!("{pid} · {name}")))
             .child(item("pm-copy", "Copiar PID".into(), false).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(pid.to_string()));
                 this.mon.menu = None;
                 this.mon.status = Some((format!("PID {pid} copiado"), false));
                 cx.notify();
             })))
-            .child(div().h(px(1.)).my_1().bg(rgb(CARD_BORDER)))
+            .child(div().h(px(1.)).my_1().bg(rgb(c_card_border())))
             .child(item("pm-int", "Interromper (SIGINT)".into(), false).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 signal(this, "INT", "Interrompido");
                 cx.notify();
@@ -990,9 +990,9 @@ impl Workspace {
             .flex()
             .items_center()
             .border_b_1()
-            .border_color(rgb(CARD_BORDER))
+            .border_color(rgb(c_card_border()))
             .text_size(px(13.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(c_text()))
             .children(cols.iter().enumerate().map(|(i, (label, col, w, right))| {
                 let col = *col;
                 let active = col == Some(sort);
@@ -1006,9 +1006,9 @@ impl Workspace {
                 cell(*w, *right)
                     .id(("fcol", i))
                     .h_full()
-                    .when(i > 0, |d| d.border_l_1().border_color(rgb(CARD_BORDER)))
-                    .when(!active, |d| d.text_color(rgb(MUTED)))
-                    .when(col.is_some(), |d| d.cursor_pointer().hover(|s| s.text_color(rgb(TEXT))))
+                    .when(i > 0, |d| d.border_l_1().border_color(rgb(c_card_border())))
+                    .when(!active, |d| d.text_color(rgb(c_muted())))
+                    .when(col.is_some(), |d| d.cursor_pointer().hover(|s| s.text_color(rgb(c_text()))))
                     .child(format!("{label}{arrow}"))
                     .when_some(col, |d, col| {
                         d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1047,8 +1047,8 @@ impl Workspace {
                     .text_size(px(13.))
                     .cursor_pointer()
                     .when(sel, |d| d.bg(with_alpha(accent, 0x55)))
-                    .when(!sel && vi % 2 == 1, |d| d.bg(rgb(0x1f1817)))
-                    .when(!sel, |d| d.hover(|s| s.bg(rgb(HOVER))))
+                    .when(!sel && vi % 2 == 1, |d| d.bg(rgb(c_code_bg())))
+                    .when(!sel, |d| d.hover(|s| s.bg(rgb(c_hover()))))
                     .child(
                         cell(None, false)
                             .gap_2()
@@ -1057,12 +1057,12 @@ impl Workspace {
                             } else {
                                 crate::icons::icon_el(&font, &ic, 14.).into_any_element()
                             }))
-                            .child(div().min_w_0().truncate().text_color(rgb(TEXT)).child(name)),
+                            .child(div().min_w_0().truncate().text_color(rgb(c_text())).child(name)),
                     )
-                    .when(show_perm, |d| d.child(cell(Some(96.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(perm)))
-                    .when(show_date, |d| d.child(cell(Some(118.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(date)))
-                    .child(cell(Some(76.0), true).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(MUTED)).child(size))
-                    .when(show_kind, |d| d.child(cell(Some(124.0), false).text_size(px(12.)).text_color(rgb(MUTED)).child(kind)))
+                    .when(show_perm, |d| d.child(cell(Some(96.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(c_muted())).child(perm)))
+                    .when(show_date, |d| d.child(cell(Some(118.0), false).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(c_muted())).child(date)))
+                    .child(cell(Some(76.0), true).font_family(mono.clone()).text_size(px(12.)).text_color(rgb(c_muted())).child(size))
+                    .when(show_kind, |d| d.child(cell(Some(124.0), false).text_size(px(12.)).text_color(rgb(c_muted())).child(kind)))
                     .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                         this.focused_pane = Some(PaneKind::Files);
                         let open = ev.click_count() >= 2;
@@ -1092,7 +1092,7 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(BG))
+            .bg(rgb(c_bg()))
             .child(header)
             .child(
                 div()
@@ -1116,12 +1116,12 @@ impl Workspace {
                     }))
                     .children(els)
                     .when_some(error, |d, e| d.child(div().p_3().text_size(px(13.)).text_color(rgb(RED)).child(e)))
-                    .when(total == 0, |d| d.child(div().p_3().text_size(px(13.)).text_color(rgb(MUTED)).child("Pasta vazia.")))
+                    .when(total == 0, |d| d.child(div().p_3().text_size(px(13.)).text_color(rgb(c_muted())).child("Pasta vazia.")))
                     .when(total > visible, |d| {
                         let track = r.h - header_h - 6.0;
                         let len = (track * visible as f32 / total as f32).max(24.0);
                         let top = (track - len) * first as f32 / (total - visible) as f32;
-                        d.child(div().absolute().right(px(2.)).top(px(top + 4.0)).w(px(5.)).h(px(len)).rounded_full().bg(rgb(BTN_HOVER)))
+                        d.child(div().absolute().right(px(2.)).top(px(top + 4.0)).w(px(5.)).h(px(len)).rounded_full().bg(rgb(c_btn_hover())))
                     }),
             )
             .into_any_element()
@@ -1157,7 +1157,7 @@ impl Workspace {
                 .justify_center()
                 .rounded_md()
                 .bg(rgb(accent))
-                .text_color(rgb(BG))
+                .text_color(rgb(c_bg()))
                 .text_size(px(16.))
                 .font_weight(FontWeight::BOLD)
                 .cursor_pointer()
@@ -1180,7 +1180,7 @@ impl Workspace {
             .items_center()
             .justify_center()
             .overflow_hidden()
-            .bg(rgb(0x0f0b0b))
+            .bg(rgb(c_deep_bg()))
             .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
                 // roda do mouse = zoom
                 let dy = f32::from(ev.delta.pixel_delta(px(20.)).y);
@@ -1207,7 +1207,7 @@ impl Workspace {
                     .bottom(px(8.))
                     .right(px(10.))
                     .text_size(px(12.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(c_muted()))
                     .child(format!("{:.0}%", zoom * 100.0)),
             )
             .into_any_element()
