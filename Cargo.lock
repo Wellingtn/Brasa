@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "brasa"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "alacritty_terminal",
  "async-channel 2.5.0",
@@ -3720,11 +3720,11 @@ dependencies = [
 
 [[package]]
 name = "ox-editor"
-version = "1.2.2"
+version = "1.2.3"
 
 [[package]]
 name = "ox-files"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "base64",
  "serde",
@@ -3734,7 +3734,7 @@ dependencies = [
 
 [[package]]
 name = "ox-markdown"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "pulldown-cmark",
  "serde",
@@ -3744,7 +3744,7 @@ dependencies = [
 
 [[package]]
 name = "ox-pty"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "portable-pty",
  "thiserror 2.0.21",
@@ -3752,7 +3752,7 @@ dependencies = [
 
 [[package]]
 name = "ox-suggest"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "serde",
  "tempfile",
