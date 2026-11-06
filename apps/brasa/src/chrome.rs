@@ -138,10 +138,41 @@ impl Workspace {
         )).child(div())
     }
 
+    /// "Atualizar" na barra superior quando há versão nova e esta instalação sabe se atualizar sozinha;
+    /// durante a atualização mostra o passo atual.
+    fn update_button(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::update::{InstallKind, UpdateState};
+        let (label, clickable) = match &self.update {
+            UpdateState::Available { version, .. } if crate::update::install_kind() != InstallKind::Source => (format!("Atualizar para {version}"), true),
+            UpdateState::Installing => (self.update_progress.lock().unwrap().clone(), false),
+            _ => return None,
+        };
+        let btn = div()
+            .id("update-btn")
+            .flex_none()
+            .h(px(28.))
+            .px(px(12.))
+            .mr_2()
+            .flex()
+            .items_center()
+            .rounded_md()
+            .text_size(px(12.))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .bg(rgb(c_run_bg()))
+            .text_color(rgb(c_text()))
+            .child(label);
+        Some(if clickable {
+            btn.cursor_pointer().hover(|s| s.bg(rgb(c_run_hover()))).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_update(cx))).into_any_element()
+        } else {
+            btn.opacity(0.8).into_any_element()
+        })
+    }
+
     pub fn render_titlebar(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let maximized = window.is_maximized();
         let cpu = self.cpu_button(cx);
         let search = self.render_gsearch(cx);
+        let update_btn = self.update_button(cx);
         let icon_btn = |id: &'static str, icon: &'static str, on: bool| {
             div()
                 .id(id)
@@ -209,6 +240,7 @@ impl Workspace {
                         cx.notify();
                     }))),
             )
+            .children(update_btn)
             .child(cpu)
             // configurações: ocupa a área à direita da barra lateral; clicar de novo volta
             .child(

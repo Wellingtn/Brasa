@@ -70,7 +70,7 @@ Testado no Pop!_OS 24.04 com GNOME 46.
 
 O botão de engrenagem, ao lado do medidor de CPU, abre as configurações na área à direita da barra lateral.
 
-- **Geral:** versão e shell em uso, aviso de nova versão, atalhos de teclado (clique num atalho e aperte o novo), pastas de notas e de configuração, o medidor de latência do teclado e o botão que restaura a aparência padrão.
+- **Geral:** versão e shell em uso, aviso de nova versão com atualização dentro do próprio app (botão "Atualizar" na barra superior; AppImage e .deb), atalhos de teclado (clique num atalho e aperte o novo), pastas de notas e de configuração, o medidor de latência do teclado e o botão que restaura a aparência padrão.
 - **Aparência:** cor do tema (vermelho, azul, verde, roxo, uma cor própria pela roda de matizes ou por hexadecimal), cor de fundo (carvão, preto, grafite ou um hexadecimal), fonte do terminal com busca e tamanho da fonte numa régua, com uma pré-visualização que você pode editar.
 
 As escolhas valem na hora e ficam em `~/.config/brasa`.

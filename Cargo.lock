@@ -690,6 +690,7 @@ dependencies = [
  "ox-markdown",
  "ox-pty",
  "ox-suggest",
+ "tempfile",
 ]
 
 [[package]]

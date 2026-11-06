@@ -13,6 +13,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 - Medidor de latência do teclado nas configurações (aba Geral, Diagnóstico).
 
 ## 1.2.0 — Dia a dia mais rápido (P a M)
+- Atualização dentro do app: botão "Atualizar" na barra superior baixa a release, confere a soma SHA-256 (o workflow passa a publicar `SHA256SUMS`), instala (AppImage troca o próprio arquivo; .deb usa `pkexec apt-get`) e reabre. Só vale a partir da versão que traz o botão.
 - Comparar a latência de teclado do Brasa com a de outros terminais, com um método que dê para repetir (o medidor do Brasa já existe).
 - Autocompletar e histórico inteligente (aproveita o `ox-suggest`).
 - Notas executáveis mais ricas: variáveis, rodar blocos em sequência, guardar a saída na nota.

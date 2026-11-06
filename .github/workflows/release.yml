@@ -58,6 +58,13 @@ jobs:
           versao=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           mv Brasa-*.AppImage "dist/Brasa-${versao}-x86_64.AppImage"
 
+      - name: Gerar as somas de verificação
+        # o app confere estas somas antes de instalar uma atualização
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
       - uses: actions/upload-artifact@v4
         with:
           name: brasa-linux

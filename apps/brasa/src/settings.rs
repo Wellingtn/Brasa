@@ -532,6 +532,8 @@ impl Workspace {
             UpdateState::Checking => ("Verificando…".to_string(), c_muted()),
             UpdateState::UpToDate => ("Você está na versão mais recente".to_string(), GREEN),
             UpdateState::Available { version, .. } => (format!("Nova versão disponível: {version}"), c_accent()),
+            UpdateState::Installing => (self.update_progress.lock().unwrap().clone(), c_accent()),
+            UpdateState::InstallFailed(why) => (format!("Não deu para atualizar: {why}"), YELLOW),
             UpdateState::NoPublicRelease => ("Nenhuma versão pública encontrada no GitHub".to_string(), c_muted()),
             UpdateState::Failed => ("Não foi possível verificar (sem internet ou sem o curl)".to_string(), c_muted()),
         };
@@ -543,7 +545,10 @@ impl Workspace {
         );
         if let UpdateState::Available { url, .. } = &self.update {
             let url = url.clone();
-            actions = actions.child(chip("open-release", "Abrir página da versão", true).on_click(cx.listener(move |_, _: &ClickEvent, _, _| open_path(std::path::Path::new(&url)))));
+            if crate::update::install_kind() != crate::update::InstallKind::Source {
+                actions = actions.child(chip("update-now", "Atualizar agora", true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.start_update(cx))));
+            }
+            actions = actions.child(chip("open-release", "Abrir página da versão", false).on_click(cx.listener(move |_, _: &ClickEvent, _, _| open_path(std::path::Path::new(&url)))));
         }
         let toggle = div()
             .flex()
@@ -664,6 +669,43 @@ impl Workspace {
             );
         }
         table
+    }
+
+    /// Baixa, confere e instala a versão nova em segundo plano; no fim, reabre o Brasa.
+    pub fn start_update(&mut self, cx: &mut Context<Self>) {
+        let crate::update::UpdateState::Available { assets, .. } = self.update.clone() else { return };
+        let kind = crate::update::install_kind();
+        self.update = crate::update::UpdateState::Installing;
+        *self.update_progress.lock().unwrap() = "Baixando…".to_string();
+        let progress = self.update_progress.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::update::install(&kind, &assets, &|step| *progress.lock().unwrap() = step.to_string()) })
+                .await;
+            let _ = this.update(cx, |ws, cx| match result {
+                Ok(program) => ws.restart_into(program, cx),
+                Err(e) => {
+                    ws.update = crate::update::UpdateState::InstallFailed(e);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Fecha o Brasa e abre `program` em seguida (a pausa dá tempo de esta janela fechar de vez).
+    fn restart_into(&mut self, program: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.save_note();
+        let _ = std::process::Command::new("sh")
+            .args(["-c", "sleep 1.5; exec \"$0\""])
+            .arg(&program)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        cx.quit();
     }
 
     /// Volta cor, fundo, fonte e tamanho ao padrão de fábrica.

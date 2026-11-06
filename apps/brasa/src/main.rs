@@ -358,6 +358,8 @@ pub struct Workspace {
     pub size_drag: bool,
     /// resultado da verificação de nova versão
     pub update: update::UpdateState,
+    /// passo atual da atualização automática ("Baixando…", "Conferindo…"), escrito pela thread que instala
+    pub update_progress: Arc<std::sync::Mutex<String>>,
     pub keymap: keys::Keymap,
     /// ação cujo atalho está sendo gravado nas configurações (próxima tecla vira o atalho)
     pub rebinding: Option<keys::Action>,
@@ -571,6 +573,8 @@ impl Workspace {
                 if let Some(f) = ws.files.as_mut() {
                     changed |= f.apply_sizes();
                 }
+                // atualização em andamento: redesenha para mostrar o passo atual
+                changed |= ws.update == update::UpdateState::Installing;
                 // comando rodando: atualiza o contador "Executando… (Ns)" e faz a brasa do logo tremeluzir
                 changed |= ws.tabs.iter().any(|t| !t.cmd_starts.is_empty());
                 // só redesenha quando algo na tela mudou
@@ -686,6 +690,7 @@ impl Workspace {
             preview_caret: 0,
             size_drag: false,
             update: update::UpdateState::Unknown,
+            update_progress: Arc::new(std::sync::Mutex::new(String::new())),
             keymap: keys::Keymap::load(),
             rebinding: None,
             keys_notice: None,

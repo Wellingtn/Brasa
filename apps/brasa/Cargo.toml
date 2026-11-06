@@ -16,6 +16,9 @@ ox-files = { path = "../../crates/ox-files" }
 ox-suggest = { path = "../../crates/ox-suggest" }
 ox-editor = { path = "../../crates/ox-editor" }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [package.metadata.deb]
 name = "brasa"
 section = "utils"
