@@ -174,12 +174,23 @@ impl Workspace {
                         .map(|k| {
                             let line = b.out_start + k as i32;
                             let runs = tab.term.line_runs(line, sel, hits.get(&line).map_or(&[][..], |v| &v[..]));
+                            // fatia desta linha de uma imagem do protocolo gráfico (cada linha desenha a sua parte)
+                            let slice = tab.term.image_at(line).and_then(|(p, k, col)| tab.term.render_image(p).map(|img| (img, p.cols, p.rows, k, col)));
                             div()
+                                .relative()
                                 .flex()
                                 .flex_row()
                                 .h(px(self.cell_h))
                                 .flex_none()
                                 .whitespace_nowrap()
+                                .when_some(slice, |d, (img, cols, rows, k, col)| {
+                                    let (w, h) = (cols as f32 * self.cell_w, rows as f32 * self.cell_h);
+                                    d.child(
+                                        div().absolute().top_0().left(px(col as f32 * self.cell_w)).w(px(w)).h(px(self.cell_h)).overflow_hidden().child(
+                                            gpui::img(img).absolute().top(px(-(k as f32) * self.cell_h)).left_0().w(px(w)).h(px(h)).object_fit(gpui::ObjectFit::Fill),
+                                        ),
+                                    )
+                                })
                                 .children(runs.into_iter().map(|r| {
                                     div()
                                         .flex_none()

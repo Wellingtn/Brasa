@@ -6,6 +6,7 @@ members = [
     "crates/ox-files",
     "crates/ox-suggest",
     "crates/ox-editor",
+    "crates/ox-graphics",
     "apps/brasa",
 ]
 # `cargo test` na raiz roda só os crates leves, sem compilar o GPUI (pesado).
@@ -15,6 +16,7 @@ default-members = [
     "crates/ox-files",
     "crates/ox-suggest",
     "crates/ox-editor",
+    "crates/ox-graphics",
 ]
 
 [workspace.package]

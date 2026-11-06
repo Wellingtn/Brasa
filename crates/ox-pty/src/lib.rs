@@ -299,6 +299,9 @@ struct Session {
 
 #[derive(Default)]
 pub struct PtyManager {
+    /// tamanho de uma célula em pixels (largura, altura): vai no tamanho do terminal para os programas
+    /// que desenham imagens acertarem a proporção
+    cell_px: Mutex<(u16, u16)>,
     next_id: AtomicU64,
     sessions: Mutex<HashMap<SessionId, Session>>,
 }
@@ -310,7 +313,7 @@ impl PtyManager {
 
     pub fn spawn(&self, cfg: SpawnConfig, events: Arc<dyn PtyEvents>) -> Result<SessionId, PtyError> {
         let pair = native_pty_system()
-            .openpty(PtySize { rows: cfg.rows, cols: cfg.cols, pixel_width: 0, pixel_height: 0 })
+            .openpty(self.size(cfg.cols, cfg.rows))
             .map_err(pty_err)?;
 
         let shell = cfg.shell.clone().unwrap_or_else(default_shell);
@@ -374,9 +377,17 @@ impl PtyManager {
     pub fn resize(&self, id: SessionId, cols: u16, rows: u16) -> Result<(), PtyError> {
         let map = self.sessions.lock().unwrap();
         let s = map.get(&id).ok_or(PtyError::NoSession(id))?;
-        s.master
-            .resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
-            .map_err(pty_err)
+        s.master.resize(self.size(cols, rows)).map_err(pty_err)
+    }
+
+    /// Tamanho de uma célula em pixels, usado nos próximos `spawn` e `resize`.
+    pub fn set_cell_px(&self, w: f32, h: f32) {
+        *self.cell_px.lock().unwrap() = (w.round().clamp(0.0, 255.0) as u16, h.round().clamp(0.0, 255.0) as u16);
+    }
+
+    fn size(&self, cols: u16, rows: u16) -> PtySize {
+        let (w, h) = *self.cell_px.lock().unwrap();
+        PtySize { rows, cols, pixel_width: cols.saturating_mul(w), pixel_height: rows.saturating_mul(h) }
     }
 
     /// Pasta atual do processo do shell (Linux: via /proc). `None` em outras plataformas.

@@ -89,7 +89,7 @@ Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (j
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
 | **M1. SSH integrado** | Lista de hosts do `~/.ssh/config`, atalho (`Ctrl+Shift+H`) e botão na barra lateral; a sessão abre já conectada e com o nome do host | M | Feito (testado contra um servidor SSH num contêiner) |
-| **M2. Imagens no terminal (Kitty)** | Protocolo gráfico do Kitty (`kitty +kitten icat`, `chafa`, visualizadores): decodificar e desenhar imagens dentro do bloco | G | A fazer |
+| **M2. Imagens no terminal (Kitty)** | Protocolo gráfico do Kitty (`kitty +kitten icat`, `chafa`, visualizadores): decodificar e desenhar imagens dentro do bloco | G | Feito (testado com `chafa -f kitty` e envios à mão; sem `icat` instalado) |
 | **M3. Sixel (opcional)** | Segundo protocolo de imagem, reaproveitando o desenho do M2 | M | Só se sobrar tempo |
 | **M4. Lançamento 1.3.0** | Versão, README, captura de tela sem dados pessoais, tag, release conferida, teste da atualização no AppImage | P | Por último |
 
@@ -100,7 +100,8 @@ Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (j
 
 ### M2. Imagens no terminal (Kitty)
 - Interpretar as sequências do protocolo gráfico do Kitty (transmitir, mostrar, apagar) e desenhar a imagem no bloco.
-- Pronto quando: `kitty +kitten icat foto.png` e `chafa -f kitty` mostram a imagem no lugar certo, rolam com o texto e somem ao limpar; imagem inválida ou enorme não trava o app (limite de tamanho).
+- Como ficou: o crate `ox-graphics` separa a sequência do fluxo, decodifica PNG/RGB/RGBA (com zlib) e guarda as imagens; a grade ganha células reservadas que apontam para a imagem, então ela rola com o texto. O tamanho da célula em pixels vai no tamanho do terminal, para o `chafa` acertar a proporção.\n- Limites: só transmissão direta (`t=d`; ler arquivo ou memória compartilhada fica de fora de propósito); imagem até 16 milhões de pixels; 256 MB de imagens por sessão; no máximo 60 linhas de altura. Não desenha na tela cheia (vim, less); animação e recorte (`x`, `y`, `w`, `h`) não existem.
+- Pronto quando: `chafa -f kitty` mostra a imagem na proporção certa e rola com o texto; imagem enorme, pedido de arquivo e lixo na sequência não travam o app (verificado).
 
 ## 1.4.0 — MCP (M a G)
 - Conectar servidores MCP e mostrar as ferramentas deles.

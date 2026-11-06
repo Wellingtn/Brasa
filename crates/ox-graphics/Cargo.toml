@@ -1,0 +1,11 @@
+[package]
+name = "ox-graphics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Protocolo gráfico do Kitty: separa as sequências do fluxo do terminal, decodifica as imagens e guarda as posições"
+
+[dependencies]
+base64.workspace = true
+png = "0.18"
+flate2 = "1"

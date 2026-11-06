@@ -345,6 +345,8 @@ pub struct Workspace {
     pub history: SharedHistory,
     pub hist: Option<histsearch::HistSearch>,
     pub ssh: Option<ssh::SshPicker>,
+    /// último tamanho de célula (pixels) enviado aos terminais
+    pub pty_cell_px: (f32, f32),
     /// notas executáveis: pergunta de variáveis, execução em andamento, aviso do resultado e últimos valores
     pub var_prompt: Option<noterun::VarPrompt>,
     pub note_run: Option<noterun::NoteRun>,
@@ -695,6 +697,7 @@ impl Workspace {
             history,
             hist: None,
             ssh: None,
+            pty_cell_px: (0.0, 0.0),
             var_prompt: None,
             note_run: None,
             run_notice: None,
@@ -961,7 +964,9 @@ impl Workspace {
                 if self.key_sent.is_some() && idx == self.active {
                     self.echo_seen = true;
                 }
+                let (cw, ch) = (self.cell_w, self.cell_h);
                 let tab = &mut self.tabs[idx];
+                tab.term.set_cell_px(cw, ch);
                 for reply in tab.term.feed(&bytes) {
                     let _ = self.pty.write(id, reply.as_bytes());
                 }
@@ -1020,6 +1025,12 @@ impl Workspace {
         self.vw = f32::from(vp.width);
         let vh = f32::from(vp.height);
         self.vh = vh;
+        // o tamanho da célula em pixels vai no tamanho do terminal (programas de imagem usam para a proporção)
+        let cell_changed = self.pty_cell_px != (self.cell_w, self.cell_h);
+        if cell_changed {
+            self.pty.set_cell_px(self.cell_w, self.cell_h);
+            self.pty_cell_px = (self.cell_w, self.cell_h);
+        }
         self.ensure_layout();
         // área principal: à direita da barra lateral e das notas, abaixo do cabeçalho (1 px de borda)
         let x = 1.0 + self.sidebar_w() + self.notes_w();
@@ -1046,6 +1057,8 @@ impl Workspace {
             let t = &mut self.tabs[idx];
             if (cols, rows) != (t.term.cols, t.term.rows) {
                 t.term.resize(cols, rows);
+                let _ = self.pty.resize(sid, cols as u16, rows as u16);
+            } else if cell_changed {
                 let _ = self.pty.resize(sid, cols as u16, rows as u16);
             }
         }

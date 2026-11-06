@@ -685,8 +685,10 @@ dependencies = [
  "async-channel 2.5.0",
  "dirs 6.0.0",
  "gpui",
+ "image",
  "ox-editor",
  "ox-files",
+ "ox-graphics",
  "ox-markdown",
  "ox-pty",
  "ox-suggest",
@@ -3730,6 +3732,15 @@ dependencies = [
  "serde",
  "tempfile",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "ox-graphics"
+version = "1.2.3"
+dependencies = [
+ "base64",
+ "flate2",
+ "png 0.18.1",
 ]
 
 [[package]]

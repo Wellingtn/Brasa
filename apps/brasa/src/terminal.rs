@@ -1,5 +1,7 @@
 //! Emulação de terminal (alacritty_terminal) + conversão da grade em "runs" prontos para desenhar.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use alacritty_terminal::event::{Event, EventListener};
@@ -11,6 +13,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, Processor};
 use gpui::Keystroke;
 
+use ox_graphics::{decode_filler, filler, Gfx, Piece, Placement, Splitter};
 use ox_pty::{parse_prompt_row, PromptInfo, PROMPT_BRANCH, PROMPT_START, PROMPT_VENV};
 #[cfg(test)]
 use ox_pty::{PROMPT_STATUS, PROMPT_TIME};
@@ -183,6 +186,13 @@ pub struct TermView {
     listener: Listener,
     pub cols: usize,
     pub rows: usize,
+    /// imagens do protocolo gráfico do Kitty
+    gfx: Gfx,
+    splitter: Splitter,
+    /// tamanho de uma célula em pixels, para calcular quantas células uma imagem ocupa
+    cell_px: (f32, f32),
+    /// imagens já convertidas para o GPUI, por `uid`
+    render_cache: RefCell<HashMap<u64, Arc<gpui::RenderImage>>>,
 }
 
 impl TermView {
@@ -195,13 +205,95 @@ impl TermView {
             listener,
             cols,
             rows,
+            gfx: Gfx::new(),
+            splitter: Splitter::new(),
+            cell_px: (8.0, 16.0),
+            render_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    pub fn set_cell_px(&mut self, w: f32, h: f32) {
+        self.cell_px = (w, h);
     }
 
     /// Processa bytes vindos do PTY. Devolve respostas que devem ser escritas de volta no PTY.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.parser.advance(&mut self.term, bytes);
-        std::mem::take(&mut *self.listener.replies.lock().unwrap())
+        let mut gfx_replies: Vec<String> = Vec::new();
+        let mut had_apc = false;
+        for piece in self.splitter.feed(bytes) {
+            match piece {
+                Piece::Text(t) => self.parser.advance(&mut self.term, &t),
+                Piece::Apc(body) => {
+                    had_apc = true;
+                    self.graphics(&body, &mut gfx_replies);
+                }
+            }
+        }
+        if had_apc {
+            // solta o que saiu do armazenamento de imagens
+            let live: std::collections::HashSet<u64> = self.gfx.live_uids().collect();
+            self.render_cache.borrow_mut().retain(|uid, _| live.contains(uid));
+        }
+        let mut replies = std::mem::take(&mut *self.listener.replies.lock().unwrap());
+        replies.extend(gfx_replies);
+        replies
+    }
+
+    /// Uma sequência do protocolo gráfico: guarda a imagem e, se for para mostrar, reserva na grade as células
+    /// que ela ocupa (caracteres de [`filler`]) e deixa o cursor logo depois, como o Kitty.
+    fn graphics(&mut self, body: &[u8], replies: &mut Vec<String>) {
+        let (col, alt) = (self.term.grid().cursor.point.column.0, self.is_alt_screen());
+        let room = self.cols.saturating_sub(col);
+        let out = self.gfx.apc(body, self.cell_px, room);
+        replies.extend(out.reply);
+        let Some(show) = out.show.filter(|_| !alt) else { return };
+        let seq = self.gfx.place(&show);
+        let mut s = String::new();
+        if show.keep_cursor {
+            s.push_str("\x1b7");
+        }
+        for r in 0..show.rows {
+            if r > 0 {
+                s.push_str("\r\n");
+                if col > 0 {
+                    s.push_str(&format!("\x1b[{}G", col + 1));
+                }
+            }
+            let ch = filler(seq, r);
+            for _ in 0..show.cols {
+                s.push(ch);
+            }
+        }
+        if show.keep_cursor {
+            s.push_str("\x1b8");
+        }
+        self.parser.advance(&mut self.term, s.as_bytes());
+    }
+
+    /// A imagem que cobre esta linha da grade: (posição, linha da imagem, coluna onde começa).
+    pub fn image_at(&self, line: i32) -> Option<(&Placement, usize, usize)> {
+        let row = &self.term.grid()[Line(line)];
+        (0..self.cols).find_map(|c| {
+            let (seq, k) = decode_filler(row[Column(c)].c)?;
+            Some((self.gfx.placement(seq)?, k, c))
+        })
+    }
+
+    /// A imagem pronta para o GPUI (convertida uma vez só).
+    pub fn render_image(&self, p: &Placement) -> Option<Arc<gpui::RenderImage>> {
+        if let Some(r) = self.render_cache.borrow().get(&p.uid) {
+            return Some(r.clone());
+        }
+        let img = self.gfx.image(p.image).filter(|i| i.uid == p.uid)?;
+        // o GPUI espera BGRA
+        let mut bgra = img.rgba.clone();
+        for px in bgra.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        let buf = image::RgbaImage::from_raw(img.width, img.height, bgra)?;
+        let r = Arc::new(gpui::RenderImage::new(vec![image::Frame::new(buf)]));
+        self.render_cache.borrow_mut().insert(p.uid, r.clone());
+        Some(r)
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) {
@@ -335,7 +427,7 @@ impl TermView {
     /// Texto de uma linha da grade (sem tratar espaços finais).
     pub fn line_text(&self, line: i32) -> String {
         let row = &self.term.grid()[Line(line)];
-        (0..self.cols).map(|c| &row[Column(c)]).filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER)).map(|c| c.c).collect()
+        (0..self.cols).map(|c| &row[Column(c)]).filter(|c| !c.flags.contains(Flags::WIDE_CHAR_SPACER)).map(|c| if decode_filler(c.c).is_some() { ' ' } else { c.c }).collect()
     }
 
     fn wraps(&self, line: i32) -> bool {
@@ -349,7 +441,7 @@ impl TermView {
 
     /// Última linha em [from, to) com conteúdo; `from - 1` se tudo estiver em branco.
     pub fn last_content_line(&self, from: i32, to: i32) -> i32 {
-        (from..to).rev().find(|l| !self.line_text(*l).trim().is_empty()).unwrap_or(from - 1)
+        (from..to).rev().find(|l| !self.line_text(*l).trim().is_empty() || self.image_at(*l).is_some()).unwrap_or(from - 1)
     }
 
     /// Agrupa o histórico + tela em blocos usando as linhas de prompt (`prompt_text` = símbolo, p.ex. "❯").
@@ -467,9 +559,10 @@ impl TermView {
                 (bg, fg) = if current { (YELLOW, c_bg()) } else { (0x4a3d12, c_term_fg()) };
             }
             let (bold, underline) = (cell.flags.contains(Flags::BOLD), cell.flags.intersects(Flags::ALL_UNDERLINES));
+            let ch = if decode_filler(cell.c).is_some() { ' ' } else { cell.c };
             match runs.last_mut() {
-                Some(r) if (r.fg, r.bg, r.bold, r.underline) == (fg, bg, bold, underline) => r.text.push(cell.c),
-                _ => runs.push(Run { text: cell.c.to_string(), fg, bg, bold, underline }),
+                Some(r) if (r.fg, r.bg, r.bold, r.underline) == (fg, bg, bold, underline) => r.text.push(ch),
+                _ => runs.push(Run { text: ch.to_string(), fg, bg, bold, underline }),
             }
         }
         runs
@@ -580,9 +673,10 @@ impl TermView {
                 }
                 let mut runs: Vec<Run> = Vec::new();
                 for c in cells {
+                    let ch = if decode_filler(c.ch).is_some() { ' ' } else { c.ch };
                     match runs.last_mut() {
-                        Some(r) if (r.fg, r.bg, r.bold, r.underline) == (c.fg, c.bg, c.bold, c.underline) => r.text.push(c.ch),
-                        _ => runs.push(Run { text: c.ch.to_string(), fg: c.fg, bg: c.bg, bold: c.bold, underline: c.underline }),
+                        Some(r) if (r.fg, r.bg, r.bold, r.underline) == (c.fg, c.bg, c.bold, c.underline) => r.text.push(ch),
+                        _ => runs.push(Run { text: ch.to_string(), fg: c.fg, bg: c.bg, bold: c.bold, underline: c.underline }),
                     }
                 }
                 RowView::Cells(runs)
