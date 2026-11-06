@@ -9,8 +9,8 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 |---|---|---|
 | 1.0.0 | Terminal em blocos, notas em Markdown que executam, gerenciador de arquivos, monitor de CPU/memória/processos | Publicada |
 | 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
-| 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (atual: 1.2.3) |
-| 1.3.0 | Imagens no terminal (Kitty), SSH integrado, mais vazão | A fazer |
+| 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
+| 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Em lançamento |
 | 1.4.0 | MCP | A fazer |
 | 1.5.0 | Editor de banco de dados (SQLite primeiro) | A fazer |
 | 2.0.0 | macOS e Windows | A fazer |
@@ -24,7 +24,6 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | Atualização no AppImage | Provada só no `.deb` (1.2.2 para 1.2.3); no AppImage o código troca o próprio arquivo e ainda não foi exercitado | Na próxima versão publicada, a partir de um AppImage |
 | Comparação de latência | Método e script prontos; falta medir em tela real com GPU contra kitty, alacritty, foot, wezterm | Quando houver forma de medir em tela real (ver `docs/latencia.md`) |
 | Releases 1.2.0 e 1.2.1 apagadas | Tinham a atualização dentro do app quebrada (filtro de endereço sensível a maiúsculas). Quem as instalou troca à mão uma vez | Nada a fazer; só avisar se alguém perguntar |
-| Captura do README | Mostra a pasta pessoal e o nome de usuário do autor num repositório público | Trocar por uma captura com pasta de exemplo |
 | Pacotes sem assinatura | `.deb`, `.rpm` e AppImage só têm soma SHA-256; sem assinatura GPG | Se um dia houver repositório próprio |
 | Estado de `branding/logo/` e `docs/relatorio-comparativo.md` | Ficam fora do repositório de propósito | Decidir se entram |
 | Saída imediata do app numa aba do terminal do Claude | Aconteceu uma vez, sem causa achada; o AppImage abre normalmente (o problema era a permissão de execução) | Só se voltar |
@@ -82,7 +81,7 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 - Publicar depois uma versão seguinte pequena (1.2.1) só para provar a atualização dentro do app.
 - Pronto quando: a atualização de 1.2.0 para 1.2.1 funciona no AppImage e no `.deb`.
 
-## 1.3.0 — Terminal completo (M a G)
+## 1.3.0 — Terminal completo (M a G) (pronto para lançar)
 
 Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (já está em cerca de 60 MB/s, 3º de 9 no comparativo); só volta se você pedir.
 
