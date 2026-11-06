@@ -10,6 +10,7 @@ mod histsearch;
 mod icons;
 mod keys;
 mod note_editor;
+mod noterun;
 mod pane_view;
 mod panes;
 mod scrollbar;
@@ -342,6 +343,13 @@ pub struct Workspace {
     /// histórico de comandos (do shell e do Brasa), usado nas sugestões e na busca do Ctrl+R
     pub history: SharedHistory,
     pub hist: Option<histsearch::HistSearch>,
+    /// notas executáveis: pergunta de variáveis, execução em andamento, aviso do resultado e últimos valores
+    pub var_prompt: Option<noterun::VarPrompt>,
+    pub note_run: Option<noterun::NoteRun>,
+    pub run_notice: Option<String>,
+    pub var_memory: std::collections::HashMap<String, String>,
+    /// blocos de saída abertos na nota (por posição entre os blocos); os outros ficam recolhidos
+    pub open_outputs: HashSet<usize>,
     pub line: String,
     pub suggestions: Vec<Suggestion>,
     pub search: Option<Search>,
@@ -684,6 +692,11 @@ impl Workspace {
             engine: Engine::with_history(history.clone()),
             history,
             hist: None,
+            var_prompt: None,
+            note_run: None,
+            run_notice: None,
+            var_memory: noterun::load_var_memory(),
+            open_outputs: HashSet::new(),
             line: String::new(),
             suggestions: Vec::new(),
             search: None,
@@ -953,6 +966,7 @@ impl Workspace {
                     tab.title = t;
                 }
                 // duração: cada prompt novo encerra o comando anterior (medido do Enter até aqui)
+                let mut finished: Vec<(String, Option<i32>, String)> = Vec::new();
                 if let Some(p) = &self.prompt_text {
                     let model = tab.term.blocks(p);
                     let n = model.blocks.len();
@@ -960,8 +974,14 @@ impl Workspace {
                         if let Some(t0) = tab.cmd_starts.pop_front() {
                             tab.durations.insert(model.blocks[k - 1].id, t0.elapsed().as_secs_f32());
                         }
+                        // comando que terminou, com o código de saída e a saída (para as notas executáveis)
+                        let b = &model.blocks[k - 1];
+                        finished.push((b.command.clone(), b.status, tab.term.lines_text(b.out_start, b.out_end).trim_end().to_string()));
                     }
                     tab.prompts_seen = tab.prompts_seen.max(n);
+                }
+                for (command, status, output) in finished {
+                    self.note_command_finished(id, &command, status, &output);
                 }
             }
             PtyMsg::Exit => self.close_tab(idx),
@@ -1123,6 +1143,10 @@ impl Workspace {
         // com a página de configurações aberta, as teclas são dela, a menos que se esteja digitando na barra lateral
         let typing_in_sidebar = self.naming.is_some() || self.filter_focused || self.title_focused;
         if self.show_settings && !typing_in_sidebar && self.on_settings_key(k, cx) {
+            return;
+        }
+
+        if self.var_prompt.is_some() && self.on_var_key(k, cx) {
             return;
         }
 
@@ -1676,6 +1700,10 @@ impl Workspace {
 
     pub fn open_note(&mut self, rel: &str) {
         self.save_note();
+        self.open_outputs.clear();
+        if self.note_run.is_none() {
+            self.run_notice = None;
+        }
         self.image_view = None;
         self.file_notice = None;
         if let Ok(src) = self.notes.read(rel) {
@@ -2038,6 +2066,7 @@ impl Render for Workspace {
             .children(if maximized { Vec::new() } else { self.resize_handles(cx) })
             .when_some(self.render_block_menu(cx), |d, m| d.child(m))
             .when_some(self.render_hist_search(cx), |d, m| d.child(m))
+            .when_some(self.render_var_prompt(cx), |d, m| d.child(m))
     }
 }
 

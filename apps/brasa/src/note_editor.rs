@@ -1239,7 +1239,38 @@ impl Workspace {
                 let blocks: Vec<AnyElement> = self.note_blocks.iter().enumerate().map(|(i, b)| self.render_block(i, b, &base, cx)).collect();
                 scroll_list(div().id("note-body").px(px(CONTENT_PAD)).py(px(4.)).flex().flex_col().gap_2().children(blocks), &self.note_scroll).into_any_element()
             };
-            column(div().flex().flex_col().child(details).child(title).into_any_element(), body)
+            // "Rodar todos" (ou "Parar") e o aviso do resultado, quando a nota tem blocos executáveis
+            let runnable = self.note_blocks.iter().filter(|b| matches!(b, Block::Code(c) if c.runnable)).count();
+            let running = self.note_run.is_some();
+            let run_row = (runnable >= 2 || running || self.run_notice.is_some()).then(|| {
+                let color = match self.run_notice.as_deref() {
+                    Some(n) if n.contains("falhou") => RED,
+                    Some(n) if n.starts_with("Terminou") => GREEN,
+                    _ => c_muted(),
+                };
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .px(px(CONTENT_PAD))
+                    .pb(px(4.))
+                    .when(running, |d| {
+                        d.child(small_btn("run-stop", "■ Parar").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.stop_note_run();
+                            cx.notify();
+                        })))
+                    })
+                    .when(!running && runnable >= 2, |d| {
+                        d.child(primary_btn("run-all", "▶ Rodar todos").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.run_all_note_blocks();
+                            cx.notify();
+                        })))
+                    })
+                    .when_some(self.run_notice.clone(), |d, n| d.child(div().min_w_0().truncate().text_xs().text_color(rgb(color)).child(n)))
+                    .into_any_element()
+            });
+            column(div().flex().flex_col().child(details).children(run_row).child(title).into_any_element(), body)
         };
 
         div()
@@ -1683,9 +1714,9 @@ impl Workspace {
                                         .child(card_btn(("ed-copy", i), "copy").on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
                                             cx.write_to_clipboard(ClipboardItem::new_string(body.clone()));
                                         })))
-                                        .when_some(run, |d, code| {
+                                        .when_some(run, |d, _| {
                                             d.child(card_btn(("ed-run", i), "terminal").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                this.run_in_terminal(&code);
+                                                this.run_note_block_at_line(open);
                                                 cx.notify();
                                             })))
                                         }),
@@ -2020,9 +2051,70 @@ impl Workspace {
                     .child(self.rich(inlines, base, false, c_text()))
                     .into_any_element()
             }
+            Block::Code(c) if c.lang == ox_markdown::OUTPUT_LANG => {
+                // saída da última execução do bloco anterior: recolhida, com hora e código de saída
+                let (stamp, status) = ox_markdown::output_meta(&c.info);
+                let open = self.open_outputs.contains(&i);
+                let (badge, badge_color) = match status {
+                    Some(0) => ("saiu com 0".to_string(), GREEN),
+                    Some(n) => (format!("falhou ({n})"), RED),
+                    None => ("sem código".to_string(), c_muted()),
+                };
+                let lines = match c.code.lines().count() {
+                    0 => "sem saída".to_string(),
+                    1 => "1 linha".to_string(),
+                    n => format!("{n} linhas"),
+                };
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(rgb(c_card_border()))
+                    .bg(rgb(c_code_bg()))
+                    .child(
+                        div()
+                            .id(("out-head", i))
+                            .h(px(30.))
+                            .px(px(10.))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .text_size(px(12.))
+                            .text_color(rgb(c_muted()))
+                            .hover(|s| s.text_color(rgb(c_text())))
+                            .child(div().flex_none().w(px(10.)).child(if open { "▾" } else { "▸" }))
+                            .child(div().flex_none().child("Saída"))
+                            .child(div().flex_none().text_color(rgb(badge_color)).child(badge))
+                            .child(div().flex_1().min_w_0().truncate().text_color(rgb(c_disabled())).child(if stamp.is_empty() { lines } else { format!("{stamp} · {lines}") }))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                if !this.open_outputs.remove(&i) {
+                                    this.open_outputs.insert(i);
+                                }
+                                cx.notify();
+                            })),
+                    )
+                    .when(open, |d| {
+                        d.child(
+                            div()
+                                .id(("out-body", i))
+                                .max_h(px(260.))
+                                .overflow_y_scroll()
+                                .px(px(10.))
+                                .pb(px(8.))
+                                .font_family(self.mono.clone())
+                                .text_size(px(13.))
+                                .text_color(rgb(c_text()))
+                                .children(c.code.lines().map(|l| div().whitespace_nowrap().min_h(px(18.)).child(l.to_string()))),
+                        )
+                    })
+                    .into_any_element()
+            }
             Block::Code(c) => {
                 // mesmo cartão do modo edição: código em cima; linguagem, copiar e executar no rodapé
-                let run_code = c.code.clone();
                 let copy_code = c.code.clone();
                 let footer = div()
                     .w_full()
@@ -2053,7 +2145,7 @@ impl Workspace {
                             })))
                             .when(c.runnable, |d| {
                                 d.child(card_btn(("run", i), "terminal").on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.run_in_terminal(&run_code);
+                                    this.run_note_block_at_index(i);
                                     cx.notify();
                                 })))
                             }),

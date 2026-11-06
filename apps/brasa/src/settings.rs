@@ -111,7 +111,7 @@ fn row(label: &'static str, control: impl IntoElement) -> Div {
 }
 
 /// Campo de texto: mostra o valor (ou a dica) e um cursor quando em foco; o clique dá o foco.
-fn field_box(id: &'static str, value: &str, hint: &'static str, focused: bool, w: f32) -> Stateful<Div> {
+pub(crate) fn field_box(id: impl Into<gpui::ElementId>, value: &str, hint: &'static str, focused: bool, w: f32) -> Stateful<Div> {
     div()
         .id(id)
         .w(px(w))

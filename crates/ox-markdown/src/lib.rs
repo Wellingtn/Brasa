@@ -1,7 +1,9 @@
 //! Markdown "ativo": converte `.md` em uma lista de blocos estruturados que a UI desenha nativamente.
 //! Blocos de shell (` ```bash `) são marcados como executáveis; a UI mostra o botão "Executar".
 
+mod active;
 mod store;
+pub use active::{code_spans, output_meta, runnable_command, runnable_count, runnable_ordinal_at_line, stored_output, substitute, variables, with_output, Output, Span, OUTPUT_LANG};
 pub use store::{NoteHit, NoteMeta, NoteNode, NoteStore, StoreError};
 
 use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -33,6 +35,8 @@ pub enum CalloutKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeBlock {
     pub lang: String,
+    /// o resto da linha de abertura depois da linguagem (nos blocos de saída: hora e código de saída)
+    pub info: String,
     pub code: String,
     pub runnable: bool,
 }
@@ -76,7 +80,7 @@ struct Walker {
     lists: Vec<Option<u64>>,
     item_number: Option<u64>,
     item_checked: Option<bool>,
-    code: Option<(String, String)>,
+    code: Option<(String, String, String)>,
 }
 
 impl Walker {
@@ -112,19 +116,23 @@ impl Walker {
         match ev {
             // --- código ---
             Event::Start(Tag::CodeBlock(kind)) => {
-                let lang = match kind {
-                    CodeBlockKind::Fenced(info) => info.split_whitespace().next().unwrap_or("").to_lowercase(),
-                    CodeBlockKind::Indented => String::new(),
+                let (lang, info) = match kind {
+                    CodeBlockKind::Fenced(info) => {
+                        let mut words = info.split_whitespace();
+                        (words.next().unwrap_or("").to_lowercase(), words.collect::<Vec<_>>().join(" "))
+                    }
+                    CodeBlockKind::Indented => (String::new(), String::new()),
                 };
-                self.code = Some((lang, String::new()));
+                self.code = Some((lang, info, String::new()));
             }
-            Event::Text(t) if self.code.is_some() => self.code.as_mut().unwrap().1.push_str(&t),
+            Event::Text(t) if self.code.is_some() => self.code.as_mut().unwrap().2.push_str(&t),
             Event::End(TagEnd::CodeBlock) => {
-                if let Some((lang, code)) = self.code.take() {
+                if let Some((lang, info, code)) = self.code.take() {
                     self.blocks.push(Block::Code(CodeBlock {
                         runnable: is_runnable(&lang),
                         code: code.trim_end_matches('\n').to_string(),
                         lang,
+                        info,
                     }));
                 }
             }
@@ -235,7 +243,7 @@ mod tests {
         assert!(matches!(&b[0], Block::Heading { level: 1, inlines } if text(inlines) == "Título"));
         assert_eq!(
             b[1],
-            Block::Code(CodeBlock { lang: "bash".into(), code: "cargo build --release".into(), runnable: true })
+            Block::Code(CodeBlock { lang: "bash".into(), info: String::new(), code: "cargo build --release".into(), runnable: true })
         );
     }
 

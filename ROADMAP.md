@@ -20,7 +20,7 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 |---|---|---|---|
 | **M1. Atualização dentro do app** | Botão "Atualizar", verificação SHA-256, `SHA256SUMS` na release | P | Código pronto e commitado; falta provar de ponta a ponta (M6) |
 | **M2. Autocompletar e histórico inteligente** | Ranking por frequência, recência e pasta; busca no histórico (`Ctrl+R`); mais comandos com sugestão de opções | M | Feito (falta conferir na tela) |
-| **M3. Notas executáveis mais ricas** | Variáveis, "Rodar todos" em sequência, saída guardada na nota | M | A fazer |
+| **M3. Notas executáveis mais ricas** | Variáveis, "Rodar todos" em sequência, saída guardada na nota | M | Feito |
 | **M4. Latência comparada** | Método repetível, medição em outros terminais, tabela e script no repositório | P a M | A fazer |
 | **M5. Mais formas de instalar** | Flatpak e `.rpm` publicados pelo workflow | M | A fazer |
 | **M6. Lançamento** | Versão 1.2.0, README e captura de tela novos, tag, release conferida, atualização testada | P | Por último |
