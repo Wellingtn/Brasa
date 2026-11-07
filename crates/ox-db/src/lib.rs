@@ -7,10 +7,12 @@
 //! - toda consulta tem limite de linhas e tempo máximo, para uma consulta enorme ou infinita não travar o app.
 
 mod export;
+mod history;
 mod pg;
 mod saved;
 pub use export::{export_table, to_csv, to_json, to_tsv, write_result, Format};
 pub use pg::{is_local_host, PgConfig, PgDatabase};
+pub use history::History;
 pub use saved::{Kind, SavedConn, Store};
 
 use std::path::{Path, PathBuf};
@@ -336,6 +338,33 @@ pub struct DbObject {
     /// a tabela a que pertence (índices e triggers)
     pub table: Option<String>,
     pub definition: String,
+}
+
+/// Interrompe a query que está rodando numa conexão, de outra thread e sem esperar a conexão ficar livre. A conexão
+/// continua aberta e utilizável depois.
+#[derive(Clone)]
+pub struct Canceller(CancelKind);
+
+#[derive(Clone)]
+enum CancelKind {
+    Sqlite(std::sync::Arc<rusqlite::InterruptHandle>),
+    Postgres { token: postgres::CancelToken, local: bool, ca_file: Option<String> },
+}
+
+impl Canceller {
+    /// Pede o cancelamento. Sem query rodando, não faz nada.
+    pub fn cancel(&self) {
+        match &self.0 {
+            CancelKind::Sqlite(h) => h.interrupt(),
+            CancelKind::Postgres { token, local, ca_file } => {
+                if *local {
+                    let _ = token.cancel_query(postgres::NoTls);
+                } else if let Ok(tls) = pg::make_tls(ca_file.as_deref()) {
+                    let _ = token.cancel_query(tls);
+                }
+            }
+        }
+    }
 }
 
 /// Uma mudança pedida na grade. Todas as pendentes vão juntas, numa transação: ou entram todas ou nenhuma.
@@ -681,6 +710,14 @@ impl Db {
         }
     }
 
+    /// Um jeito de cancelar a query em andamento, que pode ser usado de outra thread.
+    pub fn canceller(&self) -> Canceller {
+        Canceller(match self {
+            Db::Sqlite(d) => CancelKind::Sqlite(std::sync::Arc::new(d.conn.get_interrupt_handle())),
+            Db::Postgres(d) => CancelKind::Postgres { token: d.cancel_token(), local: is_local_host(&d.cfg_host()), ca_file: d.cfg_ca_file() },
+        })
+    }
+
     /// Índices, triggers, funções e sequências, com a definição de cada um.
     pub fn objects(&mut self) -> Result<Vec<DbObject>, Error> {
         match self {
@@ -918,6 +955,24 @@ mod tests {
         assert_eq!((r.rows.len(), r.truncated), (2, true));
         let all = db.query("SELECT id FROM pessoas", 3, T).unwrap();
         assert_eq!((all.rows.len(), all.truncated), (3, false));
+    }
+
+    #[test]
+    fn another_thread_can_cancel_a_sqlite_query() {
+        let (_d, p) = sample();
+        let db = Db::Sqlite(ro(&p));
+        let c = db.canceller();
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            c.cancel();
+        });
+        let started = Instant::now();
+        let sql = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT count(*) FROM n";
+        let mut db = db;
+        assert!(db.query(sql, 10, Duration::from_secs(30)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
+        t.join().unwrap();
+        assert!(db.query("SELECT 1", 10, T).is_ok());
     }
 
     #[test]

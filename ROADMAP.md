@@ -137,7 +137,7 @@ Sai da lista de limites que a própria 1.4.0 deixou (e da sonda de SQL feita no 
 | **M1. Editor de Query de verdade** | Cursor que anda (setas, Home, End, palavra), seleção com Shift e mouse, `Ctrl+A/C/X/V`, desfazer e refazer, rolagem, `Tab` recua; reaproveita o `TextBuffer` do `ox-editor` | M | Feito (10 testes da lógica; conferido na tela) |
 | **M2. Resultado que sai da tela** | Copiar célula (`Ctrl+C`) ou a grade inteira (TSV), exportar a tabela inteira ou o resultado para CSV e JSON, sem sobrescrever arquivos | M | Feito (7 testes do motor, o CSV relido pelo `sqlite3`; exportação conferida pela interface) |
 | **M3. Ver mais do banco** | Aba "Objetos" com índices, triggers, funções e sequências (PostgreSQL e SQLite) e o texto da definição, que se copia com Ctrl+C | M | Feito (motor testado nos dois bancos; a aba usa a mesma grade, ainda sem conferência visual) |
-| **M4. Rodar com controle** | Botão de cancelar a query em andamento, histórico das queries (por conexão, com busca) e várias abas de Query | M | A fazer |
+| **M4. Rodar com controle** | Botão Cancelar (a query para e a conexão continua), histórico das queries por conexão (Alt+↑/↓ no editor, 100 por conexão, `db-history.json` 0600). **Fica para depois:** busca no histórico e várias abas de Query | M | Feito em parte (cancelar testado nos dois bancos; sem conferência visual) |
 | **M5. Sixel (terminal)** | Segundo protocolo de imagem, reaproveitando o desenho do Kitty | M | A fazer |
 | **M6. Lançamento 1.5.0** | Versão, README, tag, release conferida | P | Por último |
 

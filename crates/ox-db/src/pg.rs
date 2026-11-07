@@ -37,7 +37,7 @@ impl Default for PgConfig {
 }
 
 /// Conector TLS: certificados do sistema mais, se houver, os do arquivo PEM da conexão.
-fn make_tls(ca_file: Option<&str>) -> Result<tokio_postgres_rustls::MakeRustlsConnect, Error> {
+pub(crate) fn make_tls(ca_file: Option<&str>) -> Result<tokio_postgres_rustls::MakeRustlsConnect, Error> {
     let mut roots = rustls::RootCertStore::empty();
     let native = rustls_native_certs::load_native_certs();
     roots.add_parsable_certificates(native.certs);
@@ -223,6 +223,18 @@ impl PgDatabase {
             return Err(Error::Connect("o servidor não aceitou standard_conforming_strings=on".into()));
         }
         Ok(db)
+    }
+
+    pub(crate) fn cancel_token(&self) -> postgres::CancelToken {
+        self.client.cancel_token()
+    }
+
+    pub(crate) fn cfg_host(&self) -> String {
+        self.cfg.host.clone()
+    }
+
+    pub(crate) fn cfg_ca_file(&self) -> Option<String> {
+        self.cfg.ca_file.clone()
     }
 
     /// `usuario@servidor:porta/banco`, sem senha.
@@ -848,6 +860,23 @@ mod live {
         let started = Instant::now();
         assert_eq!(db.query("SELECT pg_sleep(8)", 10, Duration::from_millis(400)).unwrap_err(), Error::Timeout);
         assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+        assert_eq!(db.query("SELECT 1 AS um", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+    }
+
+    #[test]
+    fn another_thread_can_cancel_a_running_query_and_the_connection_survives() {
+        let Some(cfg) = cfg() else { return };
+        let _g = serial();
+        let mut db = PgDatabase::connect(&cfg).unwrap();
+        let c = crate::Canceller(crate::CancelKind::Postgres { token: db.cancel_token(), local: true, ca_file: None });
+        let t = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            c.cancel();
+        });
+        let started = Instant::now();
+        assert!(db.query("SELECT pg_sleep(8)", 10, Duration::from_secs(30)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
+        t.join().unwrap();
         assert_eq!(db.query("SELECT 1 AS um", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
     }
 

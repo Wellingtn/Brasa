@@ -176,6 +176,13 @@ pub struct DbPane {
     pub tables: Vec<Table>,
     /// índices, triggers, funções e sequências do banco
     pub objects: Vec<ox_db::DbObject>,
+    /// interrompe a query em andamento sem esperar a conexão
+    pub canceller: Option<ox_db::Canceller>,
+    /// queries já rodadas (de todas as conexões) e a posição atual ao andar por elas com Alt+↑/↓
+    pub history: ox_db::History,
+    pub hist_pos: Option<usize>,
+    /// o usuário pediu para cancelar a query que está rodando
+    pub cancelling: bool,
     pub selected: Option<usize>,
     pub view: View,
     pub page: Option<Page>,
@@ -229,6 +236,10 @@ impl Default for DbPane {
             label: String::new(),
             tables: Vec::new(),
             objects: Vec::new(),
+            canceller: None,
+            history: ox_db::History::default(),
+            hist_pos: None,
+            cancelling: false,
             selected: None,
             view: View::Data,
             page: None,
@@ -281,8 +292,12 @@ impl DbPane {
     /// Painel novo, com as conexões salvas lidas do disco.
     pub fn load() -> Self {
         let (store, err) = Store::load(&store_path());
-        Self { store, error: err, ..Self::default() }
+        Self { store, error: err, history: ox_db::History::load(&history_path()), ..Self::default() }
     }
+}
+
+fn history_path() -> PathBuf {
+    crate::config_dir().join("db-history.json")
 }
 
 fn store_path() -> PathBuf {
@@ -432,9 +447,11 @@ impl Workspace {
         let (kind, label) = (db.kind(), db.label());
         let mut db = db;
         let objects = db.objects().unwrap_or_default();
+        let canceller = Some(db.canceller());
         let Some(p) = self.db.as_mut() else { return };
         let store = std::mem::take(&mut p.store);
-        *p = DbPane { store, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, writable: !read_only, selected: (!tables.is_empty()).then_some(0), tables, objects, ..DbPane::default() };
+        let history = std::mem::take(&mut p.history);
+        *p = DbPane { store, history, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, writable: !read_only, selected: (!tables.is_empty()).then_some(0), tables, objects, canceller, ..DbPane::default() };
         self.db_load_page(cx);
     }
 
@@ -663,17 +680,29 @@ impl Workspace {
         let Some(p) = self.db.as_mut() else { return };
         let Some(db) = p.db.clone() else { return };
         if p.running {
+            // o botão vira "Cancelar": interrompe a query, a conexão continua aberta
+            if let Some(c) = p.canceller.clone().filter(|_| !p.cancelling) {
+                p.cancelling = true;
+                cx.background_executor().spawn(async move { c.cancel() }).detach();
+                cx.notify();
+            }
             return;
         }
         p.running = true;
+        p.cancelling = false;
         p.error = None;
         p.epoch += 1;
         let (epoch, sql) = (p.epoch, p.editor.text());
+        let key = p.label.clone();
+        p.history.push(&key, &sql);
+        p.hist_pos = None;
+        let _ = p.history.save(&history_path());
         cx.spawn(async move |this, cx| {
             let out = cx.background_executor().spawn(async move { db.lock().unwrap().query(&sql, DEFAULT_LIMIT, DEFAULT_TIMEOUT) }).await;
             let _ = this.update(cx, |ws, cx| {
                 let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
                 p.running = false;
+                let cancelled = std::mem::take(&mut p.cancelling);
                 match out {
                     Ok(r) => {
                         p.result = Some(r);
@@ -681,6 +710,7 @@ impl Workspace {
                         p.vscroll = 0;
                         p.hscroll = 0.0;
                     }
+                    Err(_) if cancelled => p.error = Some("Query cancelada.".into()),
                     Err(e) => p.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -901,6 +931,23 @@ impl Workspace {
                 },
                 _ => return false,
             }
+            cx.notify();
+            return true;
+        }
+        if p.sql_focus && alt && !ctrl && matches!(key.as_str(), "up" | "down") {
+            let list = p.history.list(&p.label).to_vec();
+            if list.is_empty() {
+                return true;
+            }
+            // Alt+↑ vai para as mais antigas; Alt+↓ volta, e depois da mais recente esvazia o editor
+            let next = match (p.hist_pos, key.as_str()) {
+                (None, "up") => Some(list.len() - 1),
+                (Some(i), "up") => Some(i.saturating_sub(1)),
+                (Some(i), _) if i + 1 < list.len() => Some(i + 1),
+                _ => None,
+            };
+            p.hist_pos = next;
+            p.editor = TextBuffer::new(next.map_or("", |i| list[i].as_str()));
             cx.notify();
             return true;
         }
@@ -2139,11 +2186,11 @@ impl Workspace {
         let accent = self.focus_color();
         let mono = self.mono.clone();
         let p = self.db.as_ref().expect("painel aberto");
-        let (focus, running, error) = (p.sql_focus, p.running, p.error.clone());
+        let (focus, running, error, cancelling) = (p.sql_focus, p.running, p.error.clone(), p.cancelling);
         let (scroll, n_lines) = (p.sql_scroll.min(p.editor.line_count().saturating_sub(queryedit::VISIBLE_LINES)), p.editor.line_count());
         let cursor = p.editor.cursor();
         let status = if running {
-            ("Executando…".to_string(), c_muted())
+            ("Executando… clique em Cancelar para interromper".to_string(), c_muted())
         } else if let Some(e) = &error {
             (e.clone(), RED)
         } else if let Some(n) = &p.notice {
@@ -2154,7 +2201,7 @@ impl Workspace {
                 None => (format!("Executada · {} linhas em {} ms", res.rows.len(), res.elapsed.as_millis()), 0x8fd7ae),
             }
         } else {
-            ("Pronto · Ctrl+Enter executa".to_string(), c_muted())
+            ("Pronto · Ctrl+Enter executa · Alt+↑/↓ histórico".to_string(), c_muted())
         };
         let color = |t: Tok| match t {
             Tok::Plain => c_text(),
@@ -2261,7 +2308,7 @@ impl Workspace {
                     .child(div().flex_none().h(px(24.)).px(px(10.)).flex().items_center().rounded(px(5.)).bg(rgb(c_surface())).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(rgb(accent)).child("Query"))
                     .child(div().flex_1())
                     .children(wide.then(|| div().flex_none().text_size(px(11.)).text_color(rgb(c_muted())).child(format!("Limite {DEFAULT_LIMIT} linhas"))))
-                    .child(self.db_btn("db-run", if running { "Executando…" } else if wide { "Executar  Ctrl+Enter" } else { "Executar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_sql(cx)))),
+                    .child(self.db_btn("db-run", if running { if cancelling { "Cancelando…" } else { "Cancelar" } } else if wide { "Executar  Ctrl+Enter" } else { "Executar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_sql(cx)))),
             )
             .child(editor)
             .child(div().flex_none().h(px(24.)).px(px(12.)).flex().items_center().border_t_1().border_color(rgb(c_card_border())).text_size(px(11.)).text_color(rgb(status.1)).child(div().min_w_0().truncate().child(status.0)))
