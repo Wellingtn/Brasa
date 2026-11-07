@@ -10,6 +10,7 @@ mod histsearch;
 mod dbdiagram;
 mod dbpane;
 mod queryedit;
+mod sqlcomplete;
 mod ssh;
 mod icons;
 mod keys;

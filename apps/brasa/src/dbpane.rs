@@ -201,6 +201,15 @@ pub struct Stream {
     pub req: u64,
 }
 
+/// Lista de sugestões aberta no editor de Query.
+#[derive(Clone)]
+pub struct Complete {
+    pub items: Vec<crate::sqlcomplete::Item>,
+    pub sel: usize,
+    /// caracteres antes do cursor que a escolha troca
+    pub prefix_len: usize,
+}
+
 /// Exportar a grade ou o resultado: para onde gravar e em que formato.
 pub struct ExportForm {
     pub path: String,
@@ -264,6 +273,7 @@ pub struct DbPane {
     pub sql_focus: bool,
     pub result: Option<QueryResult>,
     pub stream: Option<Stream>,
+    pub ac: Option<Complete>,
     pub running: bool,
     pub filter: String,
     pub filter_focus: bool,
@@ -311,6 +321,7 @@ impl Default for DbPane {
             sql_focus: false,
             result: None,
             stream: None,
+            ac: None,
             running: false,
             filter: String::new(),
             filter_focus: false,
@@ -322,6 +333,58 @@ impl Default for DbPane {
 }
 
 impl DbPane {
+    /// Posição do cursor do editor em caracteres desde o começo do texto.
+    fn cursor_offset(&self) -> usize {
+        let c = self.editor.cursor();
+        (0..c.line).map(|l| self.editor.line(l).chars().count() + 1).sum::<usize>() + c.col
+    }
+
+    /// Troca a palavra antes do cursor (`prefix_len` caracteres) por `text`.
+    fn replace_prefix(&mut self, prefix_len: usize, text: &str) {
+        for _ in 0..prefix_len {
+            self.editor.backspace();
+        }
+        self.editor.insert_str(text);
+    }
+
+    /// Tab no editor: completa o que dá e abre a lista se sobrar mais de uma opção. `false`: nada a sugerir, o Tab
+    /// segue o caminho de sempre (recuar).
+    fn complete(&mut self) -> bool {
+        use crate::sqlcomplete::{common_prefix, suggest};
+        if self.editor.selection().is_some() {
+            return false;
+        }
+        let Some(sg) = suggest(&self.editor.text(), self.cursor_offset(), &self.tables, true) else { return false };
+        if sg.items.len() == 1 {
+            let it = sg.items[0].insert.clone();
+            self.replace_prefix(sg.prefix_len, &it);
+            self.ac = None;
+            return true;
+        }
+        let common = common_prefix(&sg.items);
+        let mut prefix_len = sg.prefix_len;
+        if common.chars().count() > prefix_len {
+            self.replace_prefix(prefix_len, &common);
+            prefix_len = common.chars().count();
+        }
+        self.ac = Some(Complete { items: sg.items, sel: 0, prefix_len });
+        true
+    }
+
+    /// Escreveu ou apagou com a lista aberta: recalcula (e fecha se não sobrou nada).
+    fn refresh_complete(&mut self) {
+        self.ac = crate::sqlcomplete::suggest(&self.editor.text(), self.cursor_offset(), &self.tables, false).map(|sg| Complete { items: sg.items, sel: 0, prefix_len: sg.prefix_len });
+    }
+
+    /// Aceita a sugestão `i` da lista aberta.
+    fn accept_complete(&mut self, i: usize) {
+        if let Some(ac) = self.ac.take() {
+            if let Some(it) = ac.items.get(i) {
+                self.replace_prefix(ac.prefix_len, &it.insert.clone());
+            }
+        }
+    }
+
     /// Painel novo, com as conexões salvas lidas do disco.
     pub fn load() -> Self {
         let (store, err) = Store::load(&store_path());
@@ -1028,7 +1091,38 @@ impl Workspace {
             cx.notify();
             return true;
         }
+        if p.sql_focus && !ctrl && !alt {
+            if let Some(n) = p.ac.as_ref().map(|a| a.items.len()) {
+                match key.as_str() {
+                    "down" | "up" => {
+                        if let Some(a) = p.ac.as_mut() {
+                            a.sel = if key == "down" { (a.sel + 1) % n } else { (a.sel + n - 1) % n };
+                        }
+                        cx.notify();
+                        return true;
+                    }
+                    "tab" | "enter" => {
+                        let i = p.ac.as_ref().map_or(0, |a| a.sel);
+                        p.accept_complete(i);
+                        p.sql_scroll = queryedit::scroll_to_cursor(p.sql_scroll, p.editor.cursor().line, p.editor.line_count());
+                        cx.notify();
+                        return true;
+                    }
+                    "escape" => {
+                        p.ac = None;
+                        cx.notify();
+                        return true;
+                    }
+                    _ => {}
+                }
+            } else if key == "tab" && !k.modifiers.shift && p.complete() {
+                p.sql_scroll = queryedit::scroll_to_cursor(p.sql_scroll, p.editor.cursor().line, p.editor.line_count());
+                cx.notify();
+                return true;
+            }
+        }
         if p.sql_focus {
+            let typing_key = k.key_char.is_some() || matches!(key.as_str(), "backspace" | "delete" | "space");
             let outcome = queryedit::handle_key(&mut p.editor, &key, k.key_char.as_deref(), ctrl, k.modifiers.shift, alt);
             match outcome {
                 Outcome::Run => {
@@ -1045,6 +1139,14 @@ impl Workspace {
                 }
                 Outcome::Handled => {}
                 Outcome::Ignored => return false,
+            }
+            // com a lista aberta, escrever ou apagar refina; qualquer outra tecla (setas, Home...) fecha
+            if p.ac.is_some() {
+                if typing_key && !ctrl {
+                    p.refresh_complete();
+                } else {
+                    p.ac = None;
+                }
             }
             p.sql_scroll = queryedit::scroll_to_cursor(p.sql_scroll, p.editor.cursor().line, p.editor.line_count());
             cx.notify();
@@ -2067,6 +2169,61 @@ impl Workspace {
             .collect();
         let (ox, oy) = origin;
         let text_pos = move |ev_x: f32, ev_y: f32| (ev_x - ox, ev_y - oy);
+        // lista de sugestões (Tab), junto da palavra que está sendo escrita
+        let popup = self.db.as_ref().and_then(|p| p.ac.clone()).filter(|_| focus).map(|ac| {
+            const ROW: f32 = 22.0;
+            let want = ac.items.len().min(6);
+            let (line, word_col) = (cursor.line.saturating_sub(scroll) as f32, cursor.col.saturating_sub(ac.prefix_len) as f32);
+            let below = 8.0 + (line + 1.0) * queryedit::LINE_H;
+            // cabe embaixo da linha (o editor é baixo)? senão abre para cima, por cima da grade
+            let room = (8.0 + queryedit::VISIBLE_LINES as f32 * queryedit::LINE_H + 12.0 - below - 6.0).max(0.0);
+            let fit = (room / ROW).floor() as usize;
+            let (shown, top) = if fit >= want.min(3) {
+                let n = want.min(fit);
+                (n, below)
+            } else {
+                (want, 8.0 + line * queryedit::LINE_H - (want as f32 * ROW + 6.0))
+            };
+            let start = if ac.sel >= shown { ac.sel + 1 - shown } else { 0 };
+            let rows = ac.items.iter().enumerate().skip(start).take(shown).map(|(i, it)| {
+                let on = i == ac.sel;
+                div()
+                    .id(("db-ac", i))
+                    .h(px(ROW))
+                    .px(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(with_alpha(accent, 0x30)))
+                    .hover(|s| s.bg(rgb(c_hover())))
+                    .child(div().flex_1().min_w_0().truncate().text_color(rgb(if on { accent } else { c_text() })).child(it.label.clone()))
+                    .child(div().flex_none().text_size(px(10.)).text_color(rgb(c_muted())).child(it.detail.clone()))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(p) = this.db.as_mut() {
+                            p.accept_complete(i);
+                            p.sql_focus = true;
+                        }
+                        cx.notify();
+                    }))
+            });
+            div()
+                .absolute()
+                .left(px(40.0 + word_col * CHAR_W))
+                .top(px(top))
+                .w(px(260.))
+                .py(px(3.))
+                .flex()
+                .flex_col()
+                .rounded(px(6.))
+                .border_1()
+                .border_color(rgb(accent))
+                .bg(rgb(c_panel()))
+                .shadow_md()
+                .font_family(mono.clone())
+                .text_size(px(12.))
+                .children(rows)
+        });
         let editor = div()
             .id("db-sql")
             .flex_1()
@@ -2084,6 +2241,7 @@ impl Workspace {
                     if let Some(p) = this.db.as_mut() {
                         p.sql_focus = true;
                         p.filter_focus = false;
+                        p.ac = None;
                         let pos = queryedit::pos_at(&p.editor, p.sql_scroll, x, y, CHAR_W);
                         if ev.click_count >= 2 {
                             p.editor.select_word_at(pos);
@@ -2155,7 +2313,7 @@ impl Workspace {
                     .child(div().flex_1())
                     .child(self.db_btn("db-run", if running { if cancelling { "Cancelando…" } else { "Cancelar" } } else if wide { "Executar  Ctrl+Enter" } else { "Executar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_sql(cx)))),
             )
-            .child(editor)
+            .child(div().relative().flex_1().min_h_0().flex().child(editor).children(popup))
             .child(div().flex_none().h(px(24.)).px(px(12.)).flex().items_center().border_t_1().border_color(rgb(c_card_border())).text_size(px(11.)).text_color(rgb(status.1)).child(div().min_w_0().truncate().child(status.0)))
             .into_any_element()
     }
