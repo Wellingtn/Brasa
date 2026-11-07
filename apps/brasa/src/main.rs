@@ -7,6 +7,7 @@ mod files_pane;
 mod folders;
 mod gsearch;
 mod histsearch;
+mod dbdiagram;
 mod dbpane;
 mod ssh;
 mod icons;
@@ -361,6 +362,8 @@ pub struct Workspace {
     pub block_menu: Option<block_view::BlockMenu>,
     /// janela de configurações aberta
     pub show_settings: bool,
+    /// página do banco de dados no lugar do terminal
+    pub show_db: bool,
     /// aba aberta nas configurações: 0 = Geral, 1 = Aparência
     pub settings_tab: usize,
     pub settings_field: Option<settings::SettingsField>,
@@ -710,6 +713,7 @@ impl Workspace {
             search: None,
             block_menu: None,
             show_settings: false,
+            show_db: false,
             settings_tab: 0,
             settings_field: None,
             wheel_drag: false,
@@ -825,9 +829,6 @@ impl Workspace {
                     Some(f) => f.reload(),
                     None => self.files = Some(files_pane::FilesPane::new(self.shell_cwd.clone())),
                 }
-            }
-            if kind == PaneKind::Db {
-                self.db.get_or_insert_with(dbpane::DbPane::default);
             }
             self.focused_pane = Some(kind);
         } else if self.focused_pane == Some(kind) {
@@ -1093,7 +1094,12 @@ impl Workspace {
             ZoomIn => self.set_font_size(self.font_size + 1.0, window),
             ZoomOut => self.set_font_size(self.font_size - 1.0, window),
             ZoomReset => self.set_font_size(DEFAULT_FONT, window),
-            Settings => self.show_settings = !self.show_settings,
+            Settings => {
+                self.show_settings = !self.show_settings;
+                if self.show_settings {
+                    self.show_db = false;
+                }
+            }
             HistorySearch => {
                 if self.hist.is_some() {
                     self.hist = None;
@@ -1216,7 +1222,7 @@ impl Workspace {
         if self.focused_pane == Some(PaneKind::Files) && !editing && !(m.control && m.shift) && self.on_files_key(k, cx) {
             return;
         }
-        if self.focused_pane == Some(PaneKind::Db) && !editing && !(m.control && m.shift) && self.on_db_key(k, cx) {
+        if self.show_db && !self.show_settings && !(m.control && m.shift) && self.on_db_key(k, cx) {
             return;
         }
 
@@ -2034,6 +2040,13 @@ impl Render for Workspace {
             .child(self.ember_line())
             .child(match settings_page {
                 Some(page) => page,
+                None if self.show_db => {
+                    // a página do banco ocupa o lugar do terminal e das notas; a barra da direita continua
+                    let x = 1.0 + self.sidebar_w();
+                    let r = panes::Rect { x, y: 1.0 + TITLE_H, w: (self.vw - x - 1.0 - pane_view::WIDGET_BAR_W).max(160.0), h: (self.vh - TITLE_H - 2.0).max(160.0) };
+                    let page = self.render_db_pane(r, cx);
+                    div().flex_1().min_h_0().flex().flex_row().child(div().flex_1().min_w_0().h_full().child(page)).child(widgets).into_any_element()
+                }
                 None => div().flex_1().min_h_0().flex().flex_row().when_some(notes, |d, n| d.child(n)).child(terminal).child(widgets).into_any_element(),
             });
 

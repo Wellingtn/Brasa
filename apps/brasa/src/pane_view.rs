@@ -314,7 +314,7 @@ impl Workspace {
                     let title = if n > fit { format!("…{}", title.chars().skip(n - fit + 1).collect::<String>()) } else { title };
                     (self.render_files_pane(body_rect, cx), title, false)
                 }
-                PaneKind::Db => (self.render_db_pane(body_rect, cx), widget_title(kind).to_string(), false),
+                PaneKind::Db => (div().into_any_element(), widget_title(kind).to_string(), false),
             };
             let is_focus = kind == focus_kind;
             if !multi {
@@ -486,8 +486,13 @@ impl Workspace {
                 this.toggle_widget(PaneKind::Files);
                 cx.notify();
             })))
-            .child(item("w-db", PaneKind::Db, open(PaneKind::Db), FILES_BLUE).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.toggle_widget(PaneKind::Db);
+            .child(item("w-db", PaneKind::Db, self.show_db, FILES_BLUE).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                // a página do banco ocupa o lugar do terminal, como as Configurações
+                this.show_db = !this.show_db;
+                if this.show_db {
+                    this.show_settings = false;
+                    this.db.get_or_insert_with(crate::dbpane::DbPane::load);
+                }
                 cx.notify();
             })))
             .child(item("w-cpu", PaneKind::Cpu, open(PaneKind::Cpu), c_peach()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {

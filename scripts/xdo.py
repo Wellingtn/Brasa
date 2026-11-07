@@ -22,16 +22,23 @@ class Xdo:
         xtst.XTestFakeButtonEvent(ctypes.c_void_p(self.d), 1, 0, 0); self.flush()
     def _kc(self, name):
         ks = x11.XStringToKeysym(name.encode()); return x11.XKeysymToKeycode(ctypes.c_void_p(self.d), ks)
+    def reset_mods(self):
+        """Solta Alt, Ctrl, Shift e Super: o Xephyr repassa o estado do teclado real, que pode estar com uma tecla presa."""
+        for m in ("Alt_L", "Alt_R", "Meta_L", "Meta_R", "Control_L", "Control_R", "Shift_L", "Shift_R", "Super_L", "Super_R"):
+            kc = self._kc(m)
+            if kc:  # nem todo teclado tem todas
+                xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), kc, 0, 0)
+        self.flush()
     def key(self, name, mods=()):
         for m in mods: xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), self._kc(m), 1, 0)
         xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), self._kc(name), 1, 0); xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), self._kc(name), 0, 0)
         for m in reversed(mods): xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), self._kc(m), 0, 0)
         self.flush()
     def type(self, text):
-        names = {" ": "space", "\n": "Return", "/": "slash", "-": "minus", ".": "period", "'": "apostrophe", "$": "dollar", "|": "bar", "~": "asciitilde", "#": "numbersign", ",": "comma", ">": "greater", "<": "less", "(": "parenleft", ")": ")" and "parenright", "*": "asterisk", "=": "equal", ";": "semicolon", "'": "apostrophe"}
+        names = {" ": "space", "\n": "Return", "/": "slash", "-": "minus", ".": "period", "'": "apostrophe", "$": "dollar", "|": "bar", "~": "asciitilde", "#": "numbersign", ",": "comma", ">": "greater", "<": "less", "(": "parenleft", ")": ")" and "parenright", "*": "asterisk", "=": "equal", "_": "underscore", ";": "semicolon", "'": "apostrophe"}
         for ch in text:
             n = names.get(ch, ch)
-            if ch.isupper() or ch in "$|~#><()*": self.key(n, ("Shift_L",))
+            if ch.isupper() or ch in "$|~#><()*_": self.key(n, ("Shift_L",))
             else: self.key(n)
 if __name__ == "__main__":
     # uso: xdo.py nudge | click X Y | type TEXTO | key NOME | wheel X Y up|down N | drag X1 Y1 X2 Y2

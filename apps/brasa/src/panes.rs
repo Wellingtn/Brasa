@@ -14,7 +14,8 @@ pub enum PaneKind {
     Procs,
     /// gerenciador de arquivos (com visualizador de imagens)
     Files,
-    /// editor de banco de dados (SQLite)
+    /// Só existe para o botão do Banco na barra da direita; a página do banco é `Workspace::show_db`
+    /// e ocupa o lugar do terminal, como as Configurações.
     Db,
 }
 

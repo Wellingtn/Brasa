@@ -7,7 +7,9 @@
 //! - toda consulta tem limite de linhas e tempo máximo, para uma consulta enorme ou infinita não travar o app.
 
 mod pg;
+mod saved;
 pub use pg::{is_local_host, PgConfig, PgDatabase};
+pub use saved::{Kind, SavedConn, Store};
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, RecvTimeoutError};
@@ -47,6 +49,8 @@ pub enum Error {
     MultipleStatements,
     #[error("usuário ou senha incorretos")]
     Auth,
+    #[error("o servidor pede senha e nenhuma foi digitada")]
+    PasswordRequired,
     #[error("{0}")]
     Connect(String),
     #[error("conexão com {0} exige criptografia (TLS), que ainda não é suportada: use um servidor na própria máquina ou um túnel SSH (ssh -L)")]
@@ -134,6 +138,15 @@ pub struct Column {
     pub default: Option<String>,
 }
 
+/// Uma chave estrangeira: estas colunas apontam para as colunas `ref_columns` de `ref_table`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForeignKey {
+    pub columns: Vec<String>,
+    pub ref_schema: Option<String>,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
     /// esquema (PostgreSQL); `None` no SQLite
@@ -143,6 +156,7 @@ pub struct Table {
     pub columns: Vec<Column>,
     pub indexes: Vec<String>,
     pub without_rowid: bool,
+    pub foreign_keys: Vec<ForeignKey>,
 }
 
 /// O que identifica uma linha para editar.
@@ -163,6 +177,11 @@ impl Table {
             Some(s) if s != "public" => format!("{s}.{}", self.name),
             _ => self.name.clone(),
         }
+    }
+
+    /// A coluna faz parte de alguma chave estrangeira?
+    pub fn is_fk(&self, column: &str) -> bool {
+        self.foreign_keys.iter().any(|f| f.columns.iter().any(|c| c == column))
     }
 
     pub fn key(&self) -> KeyKind {
@@ -309,7 +328,22 @@ impl Database {
             let mut il = self.conn.prepare(&format!("PRAGMA index_list({q})")).map_err(map_err)?;
             let indexes: Vec<String> = il.query_map([], |r| r.get::<_, String>(1)).map_err(map_err)?.collect::<Result<_, _>>().map_err(map_err)?;
             let without_rowid = sql.as_deref().is_some_and(|s| s.to_uppercase().contains("WITHOUT ROWID"));
-            out.push(Table { schema: None, name, is_view: kind == "view", columns, indexes, without_rowid });
+            let mut fk_rows = self.conn.prepare(&format!("PRAGMA foreign_key_list({q})")).map_err(map_err)?;
+            let fk_raw: Vec<(i64, String, String, String)> = fk_rows.query_map([], |r| Ok((r.get(0)?, r.get(2)?, r.get(3)?, r.get::<_, Option<String>>(4)?.unwrap_or_default()))).map_err(map_err)?.collect::<Result<_, _>>().map_err(map_err)?;
+            let mut foreign_keys: Vec<ForeignKey> = Vec::new();
+            let mut last_id = None;
+            for (id, ref_table, from, to) in fk_raw {
+                if last_id == Some(id) {
+                    if let Some(f) = foreign_keys.last_mut() {
+                        f.columns.push(from);
+                        f.ref_columns.push(to);
+                    }
+                } else {
+                    foreign_keys.push(ForeignKey { columns: vec![from], ref_schema: None, ref_table, ref_columns: vec![to] });
+                    last_id = Some(id);
+                }
+            }
+            out.push(Table { schema: None, name, is_view: kind == "view", columns, indexes, without_rowid, foreign_keys });
         }
         Ok(out)
     }
@@ -583,6 +617,29 @@ mod tests {
         let v = s.iter().find(|t| t.name == "adultos").unwrap();
         assert!(v.is_view);
         assert_eq!(v.key(), KeyKind::None);
+    }
+
+    #[test]
+    fn foreign_keys_are_read_including_composite_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fk.db");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE pai (id INTEGER PRIMARY KEY);
+                 CREATE TABLE par (a TEXT, b TEXT, PRIMARY KEY (a, b));
+                 CREATE TABLE filho (id INTEGER PRIMARY KEY, pai_id INTEGER REFERENCES pai(id), x TEXT, y TEXT, FOREIGN KEY (x, y) REFERENCES par(a, b));",
+            )
+            .unwrap();
+        let s = ro(&path).schema().unwrap();
+        let filho = s.iter().find(|t| t.name == "filho").unwrap();
+        assert_eq!(filho.foreign_keys.len(), 2);
+        let simples = filho.foreign_keys.iter().find(|f| f.ref_table == "pai").unwrap();
+        assert_eq!((simples.columns.clone(), simples.ref_columns.clone()), (vec!["pai_id".to_string()], vec!["id".to_string()]));
+        let composta = filho.foreign_keys.iter().find(|f| f.ref_table == "par").unwrap();
+        assert_eq!((composta.columns.clone(), composta.ref_columns.clone()), (vec!["x".to_string(), "y".to_string()], vec!["a".to_string(), "b".to_string()]));
+        assert!(filho.is_fk("pai_id") && filho.is_fk("y") && !filho.is_fk("id"));
+        assert!(s.iter().find(|t| t.name == "pai").unwrap().foreign_keys.is_empty());
     }
 
     #[test]

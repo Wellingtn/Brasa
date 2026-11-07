@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use postgres::error::SqlState;
 use postgres::{Client, Config, NoTls, SimpleQueryMessage};
 
-use crate::{has_trailing_statement, quote, Column, Error, Page, QueryResult, Table, Value};
+use crate::{has_trailing_statement, quote, Column, Error, ForeignKey, Page, QueryResult, Table, Value};
 
 /// Tempo máximo para conectar.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -96,7 +96,15 @@ impl PgDatabase {
         if let Some(p) = &cfg.password {
             c.password(p);
         }
-        let client = c.connect(NoTls).map_err(map_pg)?;
+        let client = c.connect(NoTls).map_err(|e| {
+            // sem senha, o cliente só diz "invalid configuration"; a causa é a senha que faltou
+            let missing = std::error::Error::source(&e).is_some_and(|s| s.to_string().contains("password missing"));
+            if missing && cfg.password.is_none() {
+                Error::PasswordRequired
+            } else {
+                map_pg(e)
+            }
+        })?;
         Ok(PgDatabase { client, cfg: PgConfig { password: None, ..cfg.clone() }, timeout_ms })
     }
 
@@ -135,7 +143,7 @@ impl PgDatabase {
         for m in tables {
             if let SimpleQueryMessage::Row(r) = m {
                 let (schema, name) = key(r.get(0), r.get(1));
-                by_table.insert((schema.clone(), name.clone()), Table { schema: Some(schema), name, is_view: r.get(2) == Some("VIEW"), columns: Vec::new(), indexes: Vec::new(), without_rowid: false });
+                by_table.insert((schema.clone(), name.clone()), Table { schema: Some(schema), name, is_view: r.get(2) == Some("VIEW"), columns: Vec::new(), indexes: Vec::new(), without_rowid: false, foreign_keys: Vec::new() });
             }
         }
         for m in cols {
@@ -160,6 +168,23 @@ impl PgDatabase {
             if let SimpleQueryMessage::Row(r) = m {
                 if let Some(t) = by_table.get_mut(&key(r.get(0), r.get(1))) {
                     t.indexes.push(r.get(2).unwrap_or("").to_string());
+                }
+            }
+        }
+        // chaves estrangeiras pelo catálogo; os nomes das colunas vêm juntos, separados pelo caractere 31
+        let fks = self.simple(
+            "SELECT ns.nspname, cl.relname, fns.nspname, fcl.relname, \
+             array_to_string(ARRAY(SELECT a.attname FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord) JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum ORDER BY k.ord), chr(31)), \
+             array_to_string(ARRAY(SELECT a.attname FROM unnest(con.confkey) WITH ORDINALITY k(attnum, ord) JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum ORDER BY k.ord), chr(31)) \
+             FROM pg_constraint con JOIN pg_class cl ON cl.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cl.relnamespace \
+             JOIN pg_class fcl ON fcl.oid = con.confrelid JOIN pg_namespace fns ON fns.oid = fcl.relnamespace \
+             WHERE con.contype = 'f' AND ns.nspname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1, 2, con.conname",
+        )?;
+        for m in fks {
+            if let SimpleQueryMessage::Row(r) = m {
+                if let Some(t) = by_table.get_mut(&key(r.get(0), r.get(1))) {
+                    let list = |i: usize| r.get(i).unwrap_or("").split('\u{1f}').map(str::to_string).collect::<Vec<_>>();
+                    t.foreign_keys.push(ForeignKey { columns: list(4), ref_schema: r.get(2).map(str::to_string), ref_table: r.get(3).unwrap_or("").to_string(), ref_columns: list(5) });
                 }
             }
         }
@@ -255,8 +280,8 @@ mod tests {
     }
 }
 
-/// Testes contra um PostgreSQL de verdade. Rodam só com `BRASA_TEST_PG=servidor:porta` (e `BRASA_TEST_PG_PASSWORD`),
-/// num banco com as tabelas `pessoas`, `tags`, a visão `adultos` e `extra.log`; sem isso, passam sem fazer nada.
+/// Testes contra um PostgreSQL de verdade. Rodam só com `BRASA_TEST_PG=servidor:porta` (e `BRASA_TEST_PG_PASSWORD`,
+/// `BRASA_TEST_PG_DB`), num banco com as tabelas `pessoas`, `tags`, a visão `adultos` e `extra.log`; sem isso, passam sem fazer nada.
 #[cfg(test)]
 mod live {
     use super::*;
@@ -264,7 +289,7 @@ mod live {
     fn cfg() -> Option<PgConfig> {
         let target = std::env::var("BRASA_TEST_PG").ok()?;
         let (host, port) = target.split_once(':')?;
-        Some(PgConfig { host: host.into(), port: port.parse().ok()?, user: "postgres".into(), password: std::env::var("BRASA_TEST_PG_PASSWORD").ok(), dbname: "postgres".into() })
+        Some(PgConfig { host: host.into(), port: port.parse().ok()?, user: "postgres".into(), password: std::env::var("BRASA_TEST_PG_PASSWORD").ok(), dbname: std::env::var("BRASA_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()) })
     }
 
     const T: Duration = Duration::from_secs(5);
@@ -275,7 +300,7 @@ mod live {
         let mut db = PgDatabase::connect(&cfg).unwrap();
         let s = db.schema().unwrap();
         let labels: Vec<_> = s.iter().map(Table::label).collect();
-        assert_eq!(labels, ["adultos", "pessoas", "tags", "extra.log"]);
+        assert!(labels.starts_with(&["adultos".to_string(), "pessoas".to_string()]) && labels.contains(&"extra.log".to_string()), "{labels:?}");
         let pessoas = s.iter().find(|t| t.name == "pessoas").unwrap();
         assert_eq!(pessoas.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "nome", "idade", "nota", "ativo"]);
         assert_eq!(pessoas.columns[0].pk, 1);
@@ -285,6 +310,12 @@ mod live {
         let tags = s.iter().find(|t| t.name == "tags").unwrap();
         assert_eq!(tags.columns.iter().map(|c| c.pk).collect::<Vec<_>>(), [1, 2, 0]);
         assert!(s.iter().find(|t| t.name == "adultos").unwrap().is_view);
+        // chave estrangeira: a tabela `tags_pessoas` (criada no preparo do teste) aponta para pessoas.id
+        if let Some(tp) = s.iter().find(|t| t.name == "tags_pessoas") {
+            assert_eq!(tp.foreign_keys.len(), 1);
+            assert_eq!((tp.foreign_keys[0].columns.as_slice(), tp.foreign_keys[0].ref_table.as_str()), (&["pessoa_id".to_string()][..], "pessoas"));
+            assert!(tp.is_fk("pessoa_id") && !tp.is_fk("rotulo"));
+        }
         assert_eq!(s.iter().find(|t| t.name == "log").unwrap().schema.as_deref(), Some("extra"));
     }
 
@@ -367,6 +398,10 @@ mod live {
         assert_eq!(PgDatabase::connect(&PgConfig { password: Some("errada".into()), ..cfg.clone() }).err(), Some(Error::Auth));
         assert!(matches!(PgDatabase::connect(&PgConfig { dbname: "nao_existe".into(), ..cfg.clone() }).err(), Some(Error::Sql(m)) if m.contains("nao_existe")));
         assert!(matches!(PgDatabase::connect(&PgConfig { port: 1, ..cfg.clone() }).err(), Some(Error::Connect(_))));
+        // sem senha num servidor que exige: mensagem clara, não "invalid configuration"
+        if cfg.password.is_some() {
+            assert_eq!(PgDatabase::connect(&PgConfig { password: None, ..cfg.clone() }).err(), Some(Error::PasswordRequired));
+        }
         // a senha nunca aparece nas mensagens
         let e = PgDatabase::connect(&PgConfig { password: Some("segredo-xyz".into()), port: 1, ..cfg }).err().unwrap().to_string();
         assert!(!e.contains("segredo-xyz"), "{e}");

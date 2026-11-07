@@ -7,6 +7,8 @@ description = "Acesso a bancos SQLite: esquema, consultas com limite e tempo má
 
 [dependencies]
 postgres = "0.19"
+serde = { workspace = true }
+serde_json = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror.workspace = true
 

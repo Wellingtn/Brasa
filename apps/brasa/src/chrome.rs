@@ -264,6 +264,9 @@ impl Workspace {
                     })
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.show_settings = !this.show_settings;
+                        if this.show_settings {
+                            this.show_db = false;
+                        }
                         cx.notify();
                     })),
             )

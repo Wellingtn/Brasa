@@ -111,13 +111,14 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
 | **M1. Motor SQLite** | Crate `ox-db`: esquema, consulta com limite e tempo máximo, edição pela chave | M | Feito (15 testes) |
-| **M2. Painel Banco e conector PostgreSQL** | Painel na barra da direita com formulário de conexão (servidor, porta, usuário, senha, banco) ou arquivo SQLite; lista de tabelas, grade paginada e ordenável, editor de SQL com `Ctrl+Enter`; PostgreSQL pelo mesmo motor | G | Feito (24 testes no motor, 7 contra um PostgreSQL real; painel testado com os dois bancos) |
+| **M2. Página Banco e conector PostgreSQL** | Página que ocupa o lugar do terminal (como as Configurações), aberta pelo botão Banco da barra da direita: tabela de conexões salvas (conectar, editar, excluir, nova), lista de tabelas, abas Dados, Estrutura, Diagrama e Resultado, consulta fixa embaixo com `Ctrl+Enter`; PostgreSQL e SQLite pelo mesmo motor | G | Feito (30 testes no motor, 8 contra um PostgreSQL real; página testada com os dois bancos) |
 | **M3. Edição na grade** | Editar célula, inserir e apagar linha com mudanças pendentes, aplicar ou descartar numa transação; só leitura como padrão | M | A fazer |
 | **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS; hoje só servidor local ou por túnel SSH | M | A fazer |
 | **M5. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida, teste da atualização no AppImage | P | Por último |
 
 ### M2. Painel Banco e conector PostgreSQL
-- Formulário de conexão no painel: servidor, porta (5432), usuário, senha, banco. A senha nunca é gravada em disco nem aparece na tela.
+- Conexões salvas em `~/.config/brasa/databases.json` (nome, tipo, servidor, porta, usuário, banco ou arquivo; modo 0600). A senha é pedida ao conectar, nunca é gravada em disco e nem existe como campo no arquivo.
+- Diagrama: tabelas em colunas (quem é referenciado fica à esquerda) e setas das chaves estrangeiras, que se destacam na tabela selecionada; a posição é calculada, não arrastável ainda.
 - Aberto só para leitura (`default_transaction_read_only`) e com tempo máximo por consulta (`statement_timeout`).
 - Esta etapa conecta sem criptografia, então só aceita servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) ou por túnel SSH (`ssh -L`, que o Brasa já abre). Servidor remoto direto fica para o M4, com TLS.
 - Esquema pelo catálogo do PostgreSQL (`information_schema`); resultados em texto, como o `psql` mostra; consulta do editor com limite de linhas por cursor.
