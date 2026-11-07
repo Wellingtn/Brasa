@@ -10,7 +10,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.0.0 | Terminal em blocos, notas em Markdown que executam, gerenciador de arquivos, monitor de CPU/memória/processos | Publicada |
 | 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
-| 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Em lançamento |
+| 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
 | 1.4.0 | MCP | A fazer |
 | 1.5.0 | Editor de banco de dados (SQLite primeiro) | A fazer |
 | 2.0.0 | macOS e Windows | A fazer |
@@ -21,7 +21,10 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 |---|---|---|
 | Flatpak nunca aberto | Foi construído pelo workflow e nunca instalado. Risco principal: o terminal achar o shell do computador por `flatpak-spawn --host` (só a montagem do comando tem teste) | Antes de divulgar o Flatpak |
 | `.rpm` sem o app aberto | Instala num Fedora 45 limpo (contêiner) e as bibliotecas estão todas; falta abrir o app numa máquina com tela. Pacote sem assinatura | Antes de divulgar o `.rpm` |
-| Atualização no AppImage | Provada só no `.deb` (1.2.2 para 1.2.3); no AppImage o código troca o próprio arquivo e ainda não foi exercitado | Na próxima versão publicada, a partir de um AppImage |
+| Atualização no AppImage | Provada só no `.deb` (1.2.2 para 1.2.3); no AppImage o código troca o próprio arquivo e ainda não foi exercitado. Dá para testar agora: abrir o AppImage 1.2.2 e atualizar para 1.3.0 | Agora |
+| Sixel | Segundo protocolo de imagem (`img2sixel`, `chafa -f sixel`); o desenho das imagens do Kitty já serve de base | Se alguém pedir |
+| Imagens na tela cheia e animadas | As imagens do Kitty não aparecem em programas de tela cheia (vim, less) e não animam; sem recorte (`x`, `y`, `w`, `h`) | Se alguém pedir |
+| Blocos na máquina remota | A sessão SSH é um comando em execução; o servidor não ganha blocos nem o prompt do Brasa | Se valer a pena |
 | Comparação de latência | Método e script prontos; falta medir em tela real com GPU contra kitty, alacritty, foot, wezterm | Quando houver forma de medir em tela real (ver `docs/latencia.md`) |
 | Releases 1.2.0 e 1.2.1 apagadas | Tinham a atualização dentro do app quebrada (filtro de endereço sensível a maiúsculas). Quem as instalou troca à mão uma vez | Nada a fazer; só avisar se alguém perguntar |
 | Pacotes sem assinatura | `.deb`, `.rpm` e AppImage só têm soma SHA-256; sem assinatura GPG | Se um dia houver repositório próprio |
@@ -81,7 +84,7 @@ Seis marcos, na ordem em que eu faria. Cada um tem o que entra e "pronto quando"
 - Publicar depois uma versão seguinte pequena (1.2.1) só para provar a atualização dentro do app.
 - Pronto quando: a atualização de 1.2.0 para 1.2.1 funciona no AppImage e no `.deb`.
 
-## 1.3.0 — Terminal completo (M a G) (pronto para lançar)
+## 1.3.0 — Terminal completo (M a G) (feito)
 
 Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (já está em cerca de 60 MB/s, 3º de 9 no comparativo); só volta se você pedir.
 
@@ -89,8 +92,8 @@ Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (j
 |---|---|---|---|
 | **M1. SSH integrado** | Lista de hosts do `~/.ssh/config`, atalho (`Ctrl+Shift+H`) e botão na barra lateral; a sessão abre já conectada e com o nome do host | M | Feito (testado contra um servidor SSH num contêiner) |
 | **M2. Imagens no terminal (Kitty)** | Protocolo gráfico do Kitty (`kitty +kitten icat`, `chafa`, visualizadores): decodificar e desenhar imagens dentro do bloco | G | Feito (testado com `chafa -f kitty` e envios à mão; sem `icat` instalado) |
-| **M3. Sixel (opcional)** | Segundo protocolo de imagem, reaproveitando o desenho do M2 | M | Só se sobrar tempo |
-| **M4. Lançamento 1.3.0** | Versão, README, captura de tela sem dados pessoais, tag, release conferida, teste da atualização no AppImage | P | Por último |
+| **M3. Sixel (opcional)** | Segundo protocolo de imagem, reaproveitando o desenho do M2 | M | Não feito (ver Pendências) |
+| **M4. Lançamento 1.3.0** | Versão, README, captura de tela sem dados pessoais, tag, release conferida, teste da atualização no AppImage | P | Feito, menos o teste da atualização no AppImage (ver Pendências) |
 
 ### M1. SSH integrado
 - Ler `~/.ssh/config` (Host, HostName, User, Port) e listar os hosts; atalho `Ctrl+Shift+H` e botão SSH na barra lateral; também aceita `usuario@maquina` digitado (validado, sem opções disfarçadas).
