@@ -138,8 +138,15 @@ Sai da lista de limites que a própria 1.4.0 deixou (e da sonda de SQL feita no 
 | **M2. Resultado que sai da tela** | Copiar célula (`Ctrl+C`) ou a grade inteira (TSV), exportar a tabela inteira ou o resultado para CSV e JSON, sem sobrescrever arquivos | M | Feito (7 testes do motor, o CSV relido pelo `sqlite3`; exportação conferida pela interface) |
 | **M3. Ver mais do banco** | Aba "Objetos" com índices, triggers, funções e sequências (PostgreSQL e SQLite) e o texto da definição, que se copia com Ctrl+C | M | Feito (motor testado nos dois bancos; a aba usa a mesma grade, ainda sem conferência visual) |
 | **M4. Rodar com controle** | Botão Cancelar (a query para e a conexão continua), histórico das queries por conexão (Alt+↑/↓ no editor, 100 por conexão, `db-history.json` 0600). **Fica para depois:** busca no histórico e várias abas de Query | M | Feito em parte (cancelar testado nos dois bancos; sem conferência visual) |
+| **A1. Cursor em todos os campos** | Campos de texto do formulário de conexão (e filtro) ganham cursor que anda (setas, Home, End, clique), seleção e colar no meio; confere de novo o editor de Query | P | A fazer |
+| **A2. Edição só por SQL** | Tira a edição na grade (duplo clique, ×, + Linha, pendentes); Dados e Resultado passam a só mostrar. Quem altera dados escreve `UPDATE`/`INSERT`/`DELETE` na Query | M | A fazer |
+| **A3. Resultado sem limite** | Some o corte em 1000 linhas: o resultado é lido aos poucos (cursor no servidor), a grade mostra uma janela e rola por milhões de linhas, com contagem e exportação do resultado inteiro | G | A fazer |
+| **A4. Autocompletar (Tab)** | Na Query, `Tab` abre uma lista como o terminal: tabelas e visões (depois de `FROM`, `JOIN`, `INTO`, `UPDATE`), colunas (de `tabela.` ou das tabelas citadas), esquemas, funções e palavras do SQL; setas escolhem, Enter aceita, Esc fecha | G | A fazer |
+| **A5. Terminal firme** | Reproduzir os travamentos (psql no Brasa, saídas enormes, programas de tela cheia), achar a causa, corrigir e deixar testes de estresse; meta: `SELECT` de milhões de linhas no psql sem travar a janela | G | A fazer |
 | **M5. Sixel (terminal)** | Segundo protocolo de imagem, reaproveitando o desenho do Kitty | M | A fazer |
 | **M6. Lançamento 1.5.0** | Versão, README, tag, release conferida | P | Por último |
+
+Ordem: A5 (o mais grave) → A1 → A2 → A3 → A4; depois M5 e M6. A2 desfaz o que a 1.4.0 entregou como "edição estilo DBeaver", a pedido do dono depois de testar.
 
 ### M1. Editor de Query de verdade
 - Trocar o texto que só cresce no fim por um `TextBuffer`: cursor em qualquer posição, seleção, copiar, recortar, colar, desfazer.
