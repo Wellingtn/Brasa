@@ -6,8 +6,10 @@
 //!   (e entram entre aspas), e valores vão sempre como parâmetros;
 //! - toda consulta tem limite de linhas e tempo máximo, para uma consulta enorme ou infinita não travar o app.
 
+mod export;
 mod pg;
 mod saved;
+pub use export::{export_table, to_csv, to_json, to_tsv, write_result, Format};
 pub use pg::{is_local_host, PgConfig, PgDatabase};
 pub use saved::{Kind, SavedConn, Store};
 

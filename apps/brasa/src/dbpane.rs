@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
 use ox_editor::TextBuffer;
-use ox_db::{Change, Database, Db, Kind, KeyKind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
+use ox_db::{export_table, to_tsv, write_result, Format, Change, Database, Db, Kind, KeyKind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
 
 use crate::dbdiagram;
 use crate::icons::wicon;
@@ -137,6 +137,12 @@ pub struct CellEdit {
     pub fresh: bool,
 }
 
+/// Exportar a grade ou o resultado: para onde gravar e em que formato.
+pub struct ExportForm {
+    pub path: String,
+    pub json: bool,
+}
+
 /// O que a grade precisa saber da edição para se desenhar.
 pub struct GridEdit {
     pub writable: bool,
@@ -187,6 +193,11 @@ pub struct DbPane {
     pub deleted: HashSet<usize>,
     pub new_rows: Vec<Vec<Option<Value>>>,
     pub cell: Option<CellEdit>,
+    /// célula escolhida com um clique (para copiar com Ctrl+C)
+    pub sel_cell: Option<(usize, usize)>,
+    pub export: Option<ExportForm>,
+    /// aviso de sucesso (por exemplo, o arquivo exportado)
+    pub notice: Option<String>,
     /// o texto da Query, com cursor, seleção e desfazer
     pub editor: TextBuffer,
     pub sql_scroll: usize,
@@ -231,6 +242,9 @@ impl Default for DbPane {
             deleted: HashSet::new(),
             new_rows: Vec::new(),
             cell: None,
+            sel_cell: None,
+            export: None,
+            notice: None,
             editor: TextBuffer::new("SELECT 1;"),
             sql_scroll: 0,
             sql_drag: false,
@@ -308,6 +322,22 @@ pub fn short_type(t: &str) -> String {
         _ => return if t.chars().count() > 14 { format!("{}…", t.chars().take(13).collect::<String>()) } else { t },
     };
     short.to_string()
+}
+
+/// Primeiro nome livre a partir de `base`: `a.csv`, `a-2.csv`, `a-3.csv`...
+pub fn unique_path(base: &Path) -> PathBuf {
+    if !base.exists() {
+        return base.to_path_buf();
+    }
+    let stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("saida").to_string();
+    let ext = base.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+    (2..10_000).map(|n| base.with_file_name(format!("{stem}-{n}{ext}"))).find(|p| !p.exists()).unwrap_or_else(|| base.to_path_buf())
+}
+
+/// Nome de arquivo seguro para uma tabela ou resultado (`public.clientes` vira `public.clientes`; barras e espaços somem).
+pub fn export_file_name(name: &str, json: bool) -> String {
+    let clean: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    format!("{}.{}", if clean.trim_matches('_').is_empty() { "resultado" } else { &clean }, if json { "json" } else { "csv" })
 }
 
 /// `~/x` vira o caminho dentro da pasta pessoal.
@@ -590,6 +620,8 @@ impl Workspace {
         let epoch = p.epoch;
         let (sort, offset, need_total) = (p.sort.clone(), p.offset, p.total.is_none());
         p.error = None;
+        p.sel_cell = None;
+        p.notice = None;
         cx.spawn(async move |this, cx| {
             let out = cx
                 .background_executor()
@@ -672,7 +704,9 @@ impl Workspace {
             }
             return false;
         }
-        if let Some(c) = p.cell.as_mut() {
+        if let Some(e) = p.export.as_mut() {
+            e.path.push_str(one_line);
+        } else if let Some(c) = p.cell.as_mut() {
             if std::mem::take(&mut c.fresh) {
                 c.text.clear();
             }
@@ -696,6 +730,13 @@ impl Workspace {
         // com a página do banco aberta o terminal fica escondido: digitação solta não pode chegar nele (um Enter
         // rodaria um comando às cegas). Atalhos com Ctrl, Alt ou Super continuam passando.
         let typing = swallows_typing(&key, k.key_char.is_some(), ctrl, alt, k.modifiers.platform);
+        // Ctrl+C numa célula escolhida (e nenhum campo de texto ativo) copia o valor dela
+        if ctrl && !alt && key == "c" {
+            let busy = self.db.as_ref().is_none_or(|p| p.sql_focus || p.filter_focus || p.cell.is_some() || p.export.is_some() || p.db.is_none());
+            if !busy && self.db_copy_cell(cx) {
+                return true;
+            }
+        }
         // Ctrl+V cola no campo que está com o teclado (query, célula, senha, formulário, filtro)
         if ctrl && !alt && key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
@@ -769,6 +810,36 @@ impl Workspace {
             return typing;
         }
 
+        if p.export.is_some() {
+            match key.as_str() {
+                "enter" => {
+                    self.db_run_export(cx);
+                    return true;
+                }
+                "escape" => p.export = None,
+                "backspace" => {
+                    if let Some(e) = p.export.as_mut() {
+                        e.path.pop();
+                    }
+                }
+                _ if !ctrl && !alt => match (&k.key_char, key.as_str()) {
+                    (Some(t), _) => {
+                        if let Some(e) = p.export.as_mut() {
+                            e.path.push_str(t);
+                        }
+                    }
+                    (None, "space") => {
+                        if let Some(e) = p.export.as_mut() {
+                            e.path.push(' ');
+                        }
+                    }
+                    _ => return false,
+                },
+                _ => return false,
+            }
+            cx.notify();
+            return true;
+        }
         if p.cell.is_some() {
             match key.as_str() {
                 "enter" | "tab" => {
@@ -1052,6 +1123,129 @@ impl Workspace {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Copiar e exportar
+
+impl Workspace {
+    /// Colunas e linhas que a aba atual mostra (com as mudanças pendentes já aplicadas na tela); `None` nas abas sem grade.
+    fn db_grid_data(&self) -> Option<(Vec<String>, Vec<Vec<Value>>)> {
+        let p = self.db.as_ref()?;
+        match p.view {
+            View::Data => {
+                let pg = p.page.as_ref()?;
+                let rows = pg.rows.iter().enumerate().map(|(ri, r)| r.iter().enumerate().map(|(ci, v)| p.updates.get(&(ri, ci)).cloned().unwrap_or_else(|| v.clone())).collect()).collect();
+                Some((pg.columns.clone(), rows))
+            }
+            View::Result => p.result.as_ref().filter(|r| !r.columns.is_empty()).map(|r| (r.columns.clone(), r.rows.clone())),
+            _ => None,
+        }
+    }
+
+    /// Ctrl+C numa célula escolhida: o valor dela vai para a área de transferência.
+    pub fn db_copy_cell(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((_, rows)) = self.db_grid_data() else { return false };
+        let Some((r, c)) = self.db.as_ref().and_then(|p| p.sel_cell) else { return false };
+        let Some(v) = rows.get(r).and_then(|row| row.get(c)) else { return false };
+        let text = match v {
+            Value::Null => String::new(),
+            other => other.display(),
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        if let Some(p) = self.db.as_mut() {
+            p.notice = Some("Célula copiada".into());
+        }
+        cx.notify();
+        true
+    }
+
+    /// Copia a grade inteira da aba (cabeçalho e linhas) em TSV, que as planilhas entendem ao colar.
+    pub fn db_copy_grid(&mut self, cx: &mut Context<Self>) {
+        let Some((cols, rows)) = self.db_grid_data() else { return };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(to_tsv(&cols, &rows)));
+        if let Some(p) = self.db.as_mut() {
+            p.notice = Some(format!("{} linha(s) copiada(s) (TSV)", rows.len()));
+            p.error = None;
+        }
+        cx.notify();
+    }
+
+    /// Abre a barra de exportar, com um nome livre na pasta pessoal.
+    pub fn db_open_export(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let base = match p.view {
+            View::Data => p.selected.and_then(|i| p.tables.get(i)).map(|t| t.label()).unwrap_or_default(),
+            _ => "resultado".to_string(),
+        };
+        let json = p.export.as_ref().is_some_and(|e| e.json);
+        let path = unique_path(&crate::home().join(export_file_name(&base, json)));
+        p.export = Some(ExportForm { path: path.display().to_string(), json });
+        p.notice = None;
+        cx.notify();
+    }
+
+    /// Troca o formato e a extensão do nome (CSV e JSON).
+    pub fn db_toggle_export_format(&mut self, cx: &mut Context<Self>) {
+        if let Some(e) = self.db.as_mut().and_then(|p| p.export.as_mut()) {
+            e.json = !e.json;
+            let (from, to) = if e.json { (".csv", ".json") } else { (".json", ".csv") };
+            if let Some(stem) = e.path.strip_suffix(from) {
+                e.path = format!("{stem}{to}");
+            }
+        }
+        cx.notify();
+    }
+
+    /// Grava o arquivo, em segundo plano. Na aba Dados exporta a tabela inteira; no Resultado, o resultado da query.
+    pub fn db_run_export(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let Some(form) = p.export.as_ref() else { return };
+        if form.path.trim().is_empty() {
+            p.error = Some("informe onde gravar o arquivo".into());
+            return;
+        }
+        let path = PathBuf::from(expand_home(form.path.trim()));
+        let format = if form.json { Format::Json } else { Format::Csv };
+        let (db, table, sort) = (p.db.clone(), p.selected.and_then(|i| p.tables.get(i)).cloned(), p.sort.clone());
+        let view = p.view;
+        let memory = self.db_grid_data();
+        let Some(p) = self.db.as_mut() else { return };
+        if p.running {
+            return;
+        }
+        p.running = true;
+        p.error = None;
+        p.epoch += 1;
+        let epoch = p.epoch;
+        let shown = path.display().to_string();
+        cx.spawn(async move |this, cx| {
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    match (view, db, table, memory) {
+                        (View::Data, Some(db), Some(t), _) => export_table(&mut db.lock().unwrap(), &t, sort.as_ref().map(|(c, a)| (c.as_str(), *a)), format, &path),
+                        (_, _, _, Some((cols, rows))) => write_result(&path, format, &cols, &rows).map(|()| rows.len() as u64),
+                        _ => Err(ox_db::Error::Sql("não há nada para exportar nesta aba".into())),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |ws, cx| {
+                let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
+                p.running = false;
+                match out {
+                    Ok(n) => {
+                        p.export = None;
+                        p.notice = Some(format!("Exportado: {n} linha(s) em {shown}"));
+                    }
+                    Err(e) => p.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Desenho
 
 const AMBER: u32 = 0xe9b872;
@@ -1202,18 +1396,26 @@ impl Workspace {
                     .font_family(mono.clone())
                     .text_color(rgb(if muted { c_muted() } else { c_text() }))
                     .when(changed && editing.is_none(), |d| d.bg(with_alpha(accent, 0x30)));
+                let is_editing = editing.is_some();
                 cell = match editing {
                     Some(t) => cell.border_1().border_color(rgb(accent)).bg(rgb(c_bg())).child(format!("{t}▏")),
                     None => cell.child(text.replace('\n', "↵")),
                 };
-                if can_edit {
-                    cell = cell.cursor_text().on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
-                        this.focused_pane = Some(PaneKind::Db);
-                        if ev.click_count() >= 2 {
-                            this.db_begin_cell(ri, ci, cx);
-                        }
-                    }));
+                if p.sel_cell == Some((ri, ci)) && !is_editing {
+                    cell = cell.border_1().border_color(rgb(accent));
                 }
+                cell = cell.when(can_edit, |d| d.cursor_text()).on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                    this.focused_pane = Some(PaneKind::Db);
+                    if ev.click_count() >= 2 && can_edit {
+                        this.db_begin_cell(ri, ci, cx);
+                    } else if let Some(p) = this.db.as_mut() {
+                        p.sel_cell = Some((ri, ci));
+                        p.notice = None;
+                        p.filter_focus = false;
+                        p.sql_focus = false;
+                    }
+                    cx.notify();
+                }));
                 row = row.child(cell);
             }
             row
@@ -1564,6 +1766,7 @@ impl Workspace {
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some(p) = this.db.as_mut() {
                     p.view = view;
+                    p.sel_cell = None;
                     p.vscroll = 0;
                     p.hscroll = 0.0;
                 }
@@ -1594,6 +1797,8 @@ impl Workspace {
         let (writable, pending, editing_cell, applying) = (p.writable, p.pending_count(), p.cell.is_some(), p.running);
         let editable = self.db_table_editable();
         let show_edit_bar = view == View::Data && writable && editable && (pending > 0 || editing_cell);
+        let export_form = p.export.as_ref().map(|e| (e.path.clone(), e.json));
+        let show_export_bar = export_form.is_some() && matches!(view, View::Data | View::Result);
 
         // barra de cima
         let mut bar = div()
@@ -1731,7 +1936,7 @@ impl Workspace {
         }
 
         // conteúdo e rodapé de cada aba
-        let area = (main_w, content_h - if show_edit_bar { EDIT_BAR_H } else { 0.0 });
+        let area = (main_w, content_h - if show_edit_bar { EDIT_BAR_H } else { 0.0 } - if show_export_bar { EDIT_BAR_H } else { 0.0 });
         let mut footer_left = String::new();
         let mut footer_nav: Option<(bool, bool)> = None;
         let content: AnyElement = match view {
@@ -1833,6 +2038,11 @@ impl Workspace {
             footer = footer.child(nav("db-prev", "arrow-left", prev, -1, cx)).child(nav("db-next", "arrow-right", next, 1, cx));
         }
         footer = footer.child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(rgb(c_muted())).child(footer_left));
+        if matches!(view, View::Data | View::Result) && footer_nav.is_some() | (view == View::Result) {
+            footer = footer
+                .child(self.db_btn("db-copy-grid", "Copiar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_copy_grid(cx))))
+                .child(self.db_btn("db-export", "Exportar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_open_export(cx))));
+        }
         if view == View::Data && writable && editable {
             footer = footer.child(self.db_btn("db-newrow", "+ Linha", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_new_row(cx))));
         }
@@ -1850,6 +2060,30 @@ impl Workspace {
                     .child(self.db_btn("db-apply", if applying { "Aplicando…" } else { "Aplicar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_apply(cx))));
             }
             b
+        });
+
+        // barra de exportar: onde gravar e em que formato
+        let export_bar = export_form.filter(|_| show_export_bar).map(|(path, json)| {
+            div()
+                .flex_none()
+                .h(px(EDIT_BAR_H))
+                .px(px(10.))
+                .flex()
+                .items_center()
+                .gap_2()
+                .bg(with_alpha(accent, 0x14))
+                .border_b_1()
+                .border_color(rgb(c_card_border()))
+                .child(div().flex_none().text_size(px(12.)).text_color(rgb(c_text())).child(if view == View::Data { "Exportar a tabela inteira para:" } else { "Exportar o resultado para:" }))
+                .child(div().flex_1().min_w_0().h(px(28.)).px(px(10.)).flex().items_center().rounded(px(5.)).border_1().border_color(rgb(accent)).bg(rgb(c_bg())).font_family(mono.clone()).text_size(px(12.)).overflow_hidden().whitespace_nowrap().text_color(rgb(c_text())).child(format!("{path}▏")))
+                .child(self.db_btn("db-fmt", if json { "JSON" } else { "CSV" }, false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_toggle_export_format(cx))))
+                .child(self.db_btn("db-export-go", if applying { "Exportando…" } else { "Exportar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_export(cx))))
+                .child(self.db_btn("db-export-no", "Cancelar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    if let Some(p) = this.db.as_mut() {
+                        p.export = None;
+                    }
+                    cx.notify();
+                })))
         });
 
         // divisória e consulta embaixo
@@ -1872,7 +2106,7 @@ impl Workspace {
                 }),
             )
             .child(bar)
-            .child(div().flex_1().min_h_0().flex().child(sidebar).child(div().flex_1().min_w_0().flex().flex_col().child(tabs).children(edit_bar).child(content).child(footer).child(split).child(dock)))
+            .child(div().flex_1().min_h_0().flex().child(sidebar).child(div().flex_1().min_w_0().flex().flex_col().child(tabs).children(export_bar).children(edit_bar).child(content).child(footer).child(split).child(dock)))
             .into_any_element()
     }
 
@@ -1888,6 +2122,8 @@ impl Workspace {
             ("Executando…".to_string(), c_muted())
         } else if let Some(e) = &error {
             (e.clone(), RED)
+        } else if let Some(n) = &p.notice {
+            (n.clone(), 0x8fd7ae)
         } else if let Some(res) = &p.result {
             match res.changes {
                 Some(n) => (format!("{n} linha(s) afetada(s)"), c_muted()),
@@ -2190,6 +2426,25 @@ mod tests {
         let sql = "SELECT 1;\nSELECT 2;\n-- fim";
         assert_eq!(sql.split('\n').count(), 3);
         assert_eq!(highlight("-- fim"), vec![("-- fim".to_string(), Tok::Comment)]);
+    }
+
+    #[test]
+    fn export_names_are_safe_and_never_collide() {
+        assert_eq!(export_file_name("clientes", false), "clientes.csv");
+        assert_eq!(export_file_name("public.itens_pedido", true), "public.itens_pedido.json");
+        assert_eq!(export_file_name("../../etc/passwd", false), ".._.._etc_passwd.csv");
+        assert_eq!(export_file_name("a b/c", false), "a_b_c.csv");
+        assert_eq!(export_file_name("", false), "resultado.csv");
+        assert_eq!(export_file_name("///", true), "resultado.json");
+        let d = std::env::temp_dir().join(format!("brasa-unique-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let base = d.join("t.csv");
+        assert_eq!(unique_path(&base), base);
+        std::fs::write(&base, "x").unwrap();
+        assert_eq!(unique_path(&base), d.join("t-2.csv"));
+        std::fs::write(d.join("t-2.csv"), "x").unwrap();
+        assert_eq!(unique_path(&base), d.join("t-3.csv"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

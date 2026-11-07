@@ -11,7 +11,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
 | 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
-| 1.4.0 | Banco de dados: PostgreSQL (com TLS) e SQLite, edição na grade, Query com scripts e triggers, diagrama | Em lançamento |
+| 1.4.0 | Banco de dados: PostgreSQL (com TLS) e SQLite, edição na grade, Query com scripts e triggers, diagrama | Publicada (1.4.0) |
 | 1.5.0 | Banco de dados, segunda parte: editor de Query completo, exportar resultado, ver índices, triggers e funções, cancelar e histórico, Sixel | A fazer |
 | 2.0.0 | macOS e Windows | A fazer |
 
@@ -118,7 +118,7 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 | **M2. Página Banco e conector PostgreSQL** | Página que ocupa o lugar do terminal (como as Configurações), aberta pelo botão Banco da barra da direita: tabela de conexões salvas (conectar, editar, excluir, nova), lista de tabelas, abas Dados, Estrutura, Diagrama e Resultado, consulta fixa embaixo com `Ctrl+Enter`; PostgreSQL e SQLite pelo mesmo motor | G | Feito (30 testes no motor, 8 contra um PostgreSQL real; página testada com os dois bancos) |
 | **M3. Edição na grade** | Editar célula (dois cliques), inserir (`+ Linha`) e apagar (`×`) com mudanças pendentes, aplicar ou descartar numa transação; sem "modo edição", como no DBeaver; conexão pode ser marcada como somente leitura | M | Feito (testado nos dois bancos e conferido no `psql`) |
 | **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS | M | Feito junto com o M2 e os ajustes (TLS testado contra um servidor real) |
-| **M5. Lançamento 1.4.0** | Versão, README, tag, release conferida | P | Em andamento |
+| **M5. Lançamento 1.4.0** | Versão, README, tag, release conferida | P | Feito (4 arquivos e somas conferidos) |
 
 ### M2. Painel Banco e conector PostgreSQL
 - Conexões salvas em `~/.config/brasa/databases.json` (nome, tipo, servidor, porta, usuário, banco ou arquivo; modo 0600). A senha é pedida ao conectar, nunca é gravada em disco e nem existe como campo no arquivo.
@@ -135,7 +135,7 @@ Sai da lista de limites que a própria 1.4.0 deixou (e da sonda de SQL feita no 
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
 | **M1. Editor de Query de verdade** | Cursor que anda (setas, Home, End, palavra), seleção com Shift e mouse, `Ctrl+A/C/X/V`, desfazer e refazer, rolagem, `Tab` recua; reaproveita o `TextBuffer` do `ox-editor` | M | Feito (10 testes da lógica; conferido na tela) |
-| **M2. Resultado que sai da tela** | Copiar célula, linha ou resultado (TSV), exportar a grade ou o resultado para CSV e JSON em arquivo | M | A fazer |
+| **M2. Resultado que sai da tela** | Copiar célula (`Ctrl+C`) ou a grade inteira (TSV), exportar a tabela inteira ou o resultado para CSV e JSON, sem sobrescrever arquivos | M | Feito (7 testes do motor, o CSV relido pelo `sqlite3`; exportação conferida pela interface) |
 | **M3. Ver mais do banco** | Lista de índices, triggers, funções e sequências (PostgreSQL e SQLite) na aba Estrutura e na barra lateral, com o texto da definição | M | A fazer |
 | **M4. Rodar com controle** | Botão de cancelar a query em andamento, histórico das queries (por conexão, com busca) e várias abas de Query | M | A fazer |
 | **M5. Sixel (terminal)** | Segundo protocolo de imagem, reaproveitando o desenho do Kitty | M | A fazer |
