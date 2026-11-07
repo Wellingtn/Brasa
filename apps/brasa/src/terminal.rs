@@ -189,6 +189,10 @@ pub struct TermView {
     /// imagens do protocolo gráfico do Kitty
     gfx: Gfx,
     splitter: Splitter,
+    /// prompts que já passaram pelo fluxo (não cai quando o histórico apaga os antigos)
+    prompts_fed: u64,
+    /// últimos bytes do pedaço anterior, para achar a marca do prompt partida entre dois pedaços
+    mark_tail: Vec<u8>,
     /// tamanho de uma célula em pixels, para calcular quantas células uma imagem ocupa
     cell_px: (f32, f32),
     /// imagens já convertidas para o GPUI, por `uid`
@@ -207,9 +211,30 @@ impl TermView {
             rows,
             gfx: Gfx::new(),
             splitter: Splitter::new(),
+            prompts_fed: 0,
+            mark_tail: Vec::new(),
             cell_px: (8.0, 16.0),
             render_cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    fn count_prompts(&mut self, t: &[u8]) {
+        let mark = ox_pty::PROMPT_START.to_string().into_bytes();
+        let mut buf = std::mem::take(&mut self.mark_tail);
+        buf.extend_from_slice(t);
+        self.prompts_fed += buf.windows(mark.len()).filter(|w| *w == mark.as_slice()).count() as u64;
+        // a marca inteira já contada não pode ser contada de novo: guarda só o que cabe dentro de uma marca incompleta
+        let keep = mark.len() - 1;
+        self.mark_tail = buf[buf.len().saturating_sub(keep)..].to_vec();
+        // um pedaço terminado numa marca completa não deixa sobra que a repita
+        if buf.ends_with(&mark) {
+            self.mark_tail.clear();
+        }
+    }
+
+    /// Quantos prompts já chegaram do shell desde que o terminal abriu.
+    pub fn prompts_fed(&self) -> u64 {
+        self.prompts_fed
     }
 
     pub fn set_cell_px(&mut self, w: f32, h: f32) {
@@ -222,7 +247,10 @@ impl TermView {
         let mut had_apc = false;
         for piece in self.splitter.feed(bytes) {
             match piece {
-                Piece::Text(t) => self.parser.advance(&mut self.term, &t),
+                Piece::Text(t) => {
+                    self.count_prompts(&t);
+                    self.parser.advance(&mut self.term, &t)
+                }
                 Piece::Apc(body) => {
                     had_apc = true;
                     self.graphics(&body, &mut gfx_replies, false);
@@ -1248,6 +1276,23 @@ mod tests {
         let (pl, _, _) = (0..10).find_map(|l| t.image_at(l)).unwrap();
         let img = t.render_image(pl);
         assert!(img.is_some());
+    }
+
+    #[test]
+    fn prompts_are_counted_even_when_split_between_chunks_or_evicted() {
+        let mut t = TermView::new(40, 5);
+        let mark = ox_pty::PROMPT_START.to_string();
+        let bytes = mark.as_bytes();
+        t.feed(format!("{mark}a\r\n").as_bytes());
+        t.feed(&bytes[..1]);
+        t.feed(&bytes[1..]);
+        t.feed(b"b\r\n");
+        assert_eq!(t.prompts_fed(), 2);
+        // muito texto empurra os prompts para fora do histórico, mas a conta não cai
+        for _ in 0..30 {
+            t.feed(format!("{mark}x\r\n").as_bytes());
+        }
+        assert_eq!(t.prompts_fed(), 32);
     }
 
     #[test]

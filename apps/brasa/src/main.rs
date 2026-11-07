@@ -154,6 +154,8 @@ pub struct Tab {
     pub cmd_starts: std::collections::VecDeque<std::time::Instant>,
     /// quantos prompts já foram vistos (para saber quando um comando terminou)
     pub prompts_seen: usize,
+    /// prompts já contados para encerrar comandos (ver `prompts_fed`)
+    pub prompts_counted: u64,
     pub durations: std::collections::HashMap<i64, f32>,
     scroll_acc: f32,
     dragging: bool,
@@ -915,6 +917,7 @@ impl Workspace {
                 hovered_block: None,
                 cmd_starts: std::collections::VecDeque::new(),
                 prompts_seen: 0,
+                prompts_counted: 0,
                 durations: std::collections::HashMap::new(),
                 scroll_acc: 0.0,
                 dragging: false,
@@ -987,10 +990,22 @@ impl Workspace {
                 if let Some(p) = &self.prompt_text {
                     let model = tab.term.blocks(p);
                     let n = model.blocks.len();
-                    for k in tab.prompts_seen.max(1)..n {
-                        if let Some(t0) = tab.cmd_starts.pop_front() {
-                            tab.durations.insert(model.blocks[k - 1].id, t0.elapsed().as_secs_f32());
+                    // blocos antigos saíram do histórico (saída com mais de 10 mil linhas): a contagem recomeça
+                    tab.prompts_seen = tab.prompts_seen.min(n);
+                    // Cada prompt novo (depois do primeiro) encerra um comando. Conta os prompts que chegaram, não os
+                    // blocos que ainda estão no histórico: depois de uma saída com mais de 10 mil linhas os blocos
+                    // antigos somem e a conta por blocos nunca fechava o comando, deixando o "brasa respirando" pedir
+                    // quadros para sempre (22% de CPU parado).
+                    let fed = tab.term.prompts_fed();
+                    while tab.prompts_counted < fed {
+                        tab.prompts_counted += 1;
+                        if tab.prompts_counted > 1 {
+                            if let (Some(t0), Some(b)) = (tab.cmd_starts.pop_front(), n.checked_sub(2).and_then(|i| model.blocks.get(i))) {
+                                tab.durations.insert(b.id, t0.elapsed().as_secs_f32());
+                            }
                         }
+                    }
+                    for k in tab.prompts_seen.max(1)..n {
                         // comando que terminou, com o código de saída e a saída (para as notas executáveis)
                         let b = &model.blocks[k - 1];
                         finished.push((b.command.clone(), b.status, tab.term.lines_text(b.out_start, b.out_end).trim_end().to_string()));
