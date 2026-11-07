@@ -7,12 +7,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
+use ox_editor::TextBuffer;
 use ox_db::{Change, Database, Db, Kind, KeyKind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
 
 use crate::dbdiagram;
 use crate::icons::wicon;
 use crate::pane_view::with_alpha;
 use crate::panes::{PaneKind, Rect};
+use crate::queryedit::{self, Outcome};
 use crate::theme::*;
 use crate::Workspace;
 
@@ -185,7 +187,11 @@ pub struct DbPane {
     pub deleted: HashSet<usize>,
     pub new_rows: Vec<Vec<Option<Value>>>,
     pub cell: Option<CellEdit>,
-    pub sql: String,
+    /// o texto da Query, com cursor, seleção e desfazer
+    pub editor: TextBuffer,
+    pub sql_scroll: usize,
+    /// o botão do mouse está apertado dentro do editor (arrastando uma seleção)
+    pub sql_drag: bool,
     pub sql_focus: bool,
     pub result: Option<QueryResult>,
     pub running: bool,
@@ -225,7 +231,9 @@ impl Default for DbPane {
             deleted: HashSet::new(),
             new_rows: Vec::new(),
             cell: None,
-            sql: "SELECT 1;".into(),
+            editor: TextBuffer::new("SELECT 1;"),
+            sql_scroll: 0,
+            sql_drag: false,
             sql_focus: false,
             result: None,
             running: false,
@@ -622,7 +630,7 @@ impl Workspace {
         p.running = true;
         p.error = None;
         p.epoch += 1;
-        let (epoch, sql) = (p.epoch, p.sql.clone());
+        let (epoch, sql) = (p.epoch, p.editor.text());
         cx.spawn(async move |this, cx| {
             let out = cx.background_executor().spawn(async move { db.lock().unwrap().query(&sql, DEFAULT_LIMIT, DEFAULT_TIMEOUT) }).await;
             let _ = this.update(cx, |ws, cx| {
@@ -673,7 +681,8 @@ impl Workspace {
             p.filter.push_str(one_line);
             p.side_scroll = 0;
         } else if p.sql_focus {
-            p.sql.push_str(&text.replace("\r\n", "\n"));
+            p.editor.insert_str(&text.replace("\r\n", "\n"));
+            p.sql_scroll = queryedit::scroll_to_cursor(p.sql_scroll, p.editor.cursor().line, p.editor.line_count());
         } else {
             return false;
         }
@@ -819,24 +828,24 @@ impl Workspace {
             return true;
         }
         if p.sql_focus {
-            match key.as_str() {
-                "enter" if ctrl => {
+            let outcome = queryedit::handle_key(&mut p.editor, &key, k.key_char.as_deref(), ctrl, k.modifiers.shift, alt);
+            match outcome {
+                Outcome::Run => {
                     self.db_run_sql(cx);
                     return true;
                 }
-                "escape" => p.sql_focus = false,
-                "enter" => p.sql.push('\n'),
-                "backspace" => {
-                    p.sql.pop();
+                Outcome::Blur => p.sql_focus = false,
+                Outcome::Copy(t) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(t)),
+                Outcome::Cut(t) => cx.write_to_clipboard(gpui::ClipboardItem::new_string(t)),
+                Outcome::Paste => {
+                    if let Some(t) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                        p.editor.insert_str(&t.replace("\r\n", "\n"));
+                    }
                 }
-                "tab" => p.sql.push_str("  "),
-                _ if !ctrl && !alt => match (&k.key_char, key.as_str()) {
-                    (Some(c), _) => p.sql.push_str(c),
-                    (None, "space") => p.sql.push(' '),
-                    _ => return false,
-                },
-                _ => return false,
+                Outcome::Handled => {}
+                Outcome::Ignored => return false,
             }
+            p.sql_scroll = queryedit::scroll_to_cursor(p.sql_scroll, p.editor.cursor().line, p.editor.line_count());
             cx.notify();
             return true;
         }
@@ -1845,7 +1854,7 @@ impl Workspace {
 
         // divisória e consulta embaixo
         let split = div().flex_none().h(px(SPLIT_H)).flex().items_center().justify_center().gap(px(3.)).bg(rgb(c_bg())).border_t_1().border_color(rgb(c_card_border())).children((0..3).map(|_| div().size(px(3.)).rounded_full().bg(rgb(c_disabled()))));
-        let dock = self.render_db_dock(main_w > 520.0, cx);
+        let dock = self.render_db_dock(main_w > 520.0, (r.x + side_w + 40.0, r.y + r.h - DOCK_H + 36.0 + 8.0), cx);
 
         div()
             .size_full()
@@ -1868,11 +1877,13 @@ impl Workspace {
     }
 
     /// Área da consulta, fixa embaixo: editor com destaque de SQL, executar e estado.
-    fn render_db_dock(&mut self, wide: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn render_db_dock(&mut self, wide: bool, origin: (f32, f32), cx: &mut Context<Self>) -> AnyElement {
         let accent = self.focus_color();
         let mono = self.mono.clone();
         let p = self.db.as_ref().expect("painel aberto");
-        let (sql, focus, running, error) = (p.sql.clone(), p.sql_focus, p.running, p.error.clone());
+        let (focus, running, error) = (p.sql_focus, p.running, p.error.clone());
+        let (scroll, n_lines) = (p.sql_scroll.min(p.editor.line_count().saturating_sub(queryedit::VISIBLE_LINES)), p.editor.line_count());
+        let cursor = p.editor.cursor();
         let status = if running {
             ("Executando…".to_string(), c_muted())
         } else if let Some(e) = &error {
@@ -1885,10 +1896,6 @@ impl Workspace {
         } else {
             ("Pronto · Ctrl+Enter executa".to_string(), c_muted())
         };
-        const SHOWN: usize = 6;
-        let lines: Vec<&str> = sql.split('\n').collect();
-        let skip = lines.len().saturating_sub(SHOWN);
-        let last = lines.len() - 1;
         let color = |t: Tok| match t {
             Tok::Plain => c_text(),
             Tok::Keyword => accent,
@@ -1896,6 +1903,16 @@ impl Workspace {
             Tok::Num => BLUE,
             Tok::Comment => c_muted(),
         };
+        // as linhas visíveis, já cortadas em pedaços (cor, seleção, cursor)
+        let last_visible = (scroll + queryedit::VISIBLE_LINES).min(n_lines);
+        let rows: Vec<Vec<queryedit::Seg>> = (scroll..last_visible)
+            .map(|i| {
+                let tokens = highlight(p.editor.line(i));
+                queryedit::line_segments(&tokens, (focus && cursor.line == i).then_some(cursor.col), queryedit::selection_on_line(&p.editor, i))
+            })
+            .collect();
+        let (ox, oy) = origin;
+        let text_pos = move |ev_x: f32, ev_y: f32| (ev_x - ox, ev_y - oy);
         let editor = div()
             .id("db-sql")
             .flex_1()
@@ -1907,23 +1924,61 @@ impl Workspace {
             .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    this.focused_pane = Some(PaneKind::Db);
+                    let (x, y) = text_pos(f32::from(ev.position.x), f32::from(ev.position.y));
                     if let Some(p) = this.db.as_mut() {
                         p.sql_focus = true;
                         p.filter_focus = false;
+                        p.cell = None;
+                        let pos = queryedit::pos_at(&p.editor, p.sql_scroll, x, y, CHAR_W);
+                        if ev.click_count >= 2 {
+                            p.editor.select_word_at(pos);
+                        } else {
+                            p.editor.move_to(pos, ev.modifiers.shift);
+                            p.sql_drag = true;
+                        }
                     }
-                    this.focused_pane = Some(PaneKind::Db);
                     cx.stop_propagation();
                     cx.notify();
                 }),
             )
-            .child(div().flex_none().w(px(40.)).pt(px(8.)).pr(px(10.)).flex().flex_col().items_end().text_color(rgb(c_disabled())).children((skip..lines.len()).map(|i| div().h(px(20.)).child(format!("{}", i + 1)))))
-            .child(div().flex_1().min_w_0().pt(px(8.)).pr(px(12.)).flex().flex_col().children(lines.iter().enumerate().skip(skip).map(|(i, l)| {
-                let mut row = div().h(px(20.)).flex().whitespace_nowrap().children(highlight(l).into_iter().map(|(text, t)| div().flex_none().text_color(rgb(color(t))).child(text)));
-                if i == last && focus {
-                    row = row.child(div().flex_none().w(px(2.)).h(px(14.)).mt(px(3.)).bg(rgb(accent)));
+            .on_mouse_move(cx.listener(move |this, ev: &MouseMoveEvent, _, cx| {
+                let (x, y) = text_pos(f32::from(ev.position.x), f32::from(ev.position.y));
+                if let Some(p) = this.db.as_mut().filter(|p| p.sql_drag) {
+                    if ev.pressed_button == Some(MouseButton::Left) {
+                        let pos = queryedit::pos_at(&p.editor, p.sql_scroll, x, y, CHAR_W);
+                        p.editor.move_to(pos, true);
+                        cx.notify();
+                    } else {
+                        p.sql_drag = false;
+                    }
                 }
-                row
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, _| {
+                    if let Some(p) = this.db.as_mut() {
+                        p.sql_drag = false;
+                    }
+                }),
+            )
+            .on_scroll_wheel(cx.listener(|this, ev: &ScrollWheelEvent, _, cx| {
+                cx.stop_propagation();
+                if let Some(p) = this.db.as_mut() {
+                    let dy = f32::from(ev.delta.pixel_delta(px(queryedit::LINE_H)).y);
+                    let max = p.editor.line_count().saturating_sub(queryedit::VISIBLE_LINES) as i64;
+                    p.sql_scroll = (p.sql_scroll as i64 - (dy / queryedit::LINE_H).round() as i64).clamp(0, max) as usize;
+                }
+                cx.notify();
+            }))
+            .child(div().flex_none().w(px(40.)).pt(px(8.)).pr(px(10.)).flex().flex_col().items_end().text_color(rgb(c_disabled())).children((scroll..last_visible).map(|i| div().h(px(queryedit::LINE_H)).child(format!("{}", i + 1)))))
+            .child(div().flex_1().min_w_0().pt(px(8.)).pr(px(12.)).flex().flex_col().overflow_hidden().children(rows.into_iter().map(|segs| {
+                div().h(px(queryedit::LINE_H)).flex().items_center().whitespace_nowrap().children(segs.into_iter().flat_map(|sg| {
+                    let caret = sg.caret_before.then(|| div().flex_none().w(px(2.)).h(px(15.)).bg(rgb(accent)));
+                    let body = (!sg.text.is_empty()).then(|| div().flex_none().text_color(rgb(color(sg.tok))).when(sg.sel, |d| d.bg(with_alpha(accent, 0x55))).child(sg.text));
+                    caret.into_iter().map(IntoElement::into_any_element).chain(body.into_iter().map(IntoElement::into_any_element))
+                }))
             })));
         div()
             .flex_none()

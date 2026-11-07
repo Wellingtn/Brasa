@@ -9,6 +9,7 @@ mod gsearch;
 mod histsearch;
 mod dbdiagram;
 mod dbpane;
+mod queryedit;
 mod ssh;
 mod icons;
 mod keys;

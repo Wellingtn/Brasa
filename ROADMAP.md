@@ -12,6 +12,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
 | 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
 | 1.4.0 | Banco de dados: PostgreSQL (com TLS) e SQLite, edição na grade, Query com scripts e triggers, diagrama | Em lançamento |
+| 1.5.0 | Banco de dados, segunda parte: editor de Query completo, exportar resultado, ver índices, triggers e funções, cancelar e histórico, Sixel | A fazer |
 | 2.0.0 | macOS e Windows | A fazer |
 
 ## Pendências e débitos (o que ficou sem fechar)
@@ -126,6 +127,41 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 - Servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) conecta sem criptografia; qualquer outro **exige TLS**, com o certificado conferido (emissor, nome e validade) contra os certificados do sistema e, se a conexão tiver, contra um arquivo PEM de CA. Sem TLS, a conexão nem é tentada. Mensagens claras para CA desconhecida, nome que não bate e certificado vencido.
 - Esquema pelo catálogo do PostgreSQL (`information_schema`); resultados em texto, como o `psql` mostra; consulta do editor com limite de linhas por cursor.
 - Pronto quando: testes contra um PostgreSQL de verdade (contêiner) cobrem conexão, senha errada, esquema, página, query, limite, tempo máximo e só leitura; e o painel abre um SQLite e um PostgreSQL e mostra a grade.\n- Como rodar os testes contra o PostgreSQL: `BRASA_TEST_PG=127.0.0.1:5432 BRASA_TEST_PG_PASSWORD=... cargo test -p ox-db` (sem as variáveis, esses testes passam sem fazer nada).\n- Limite assumido: a proteção de só leitura é contra acidente, não contra o próprio usuário (quem digita `SET default_transaction_read_only = off` no editor a desliga); o botão de edição do M3 será o jeito explícito.
+
+## 1.5.0 — Banco de dados, segunda parte (G)
+
+Sai da lista de limites que a própria 1.4.0 deixou (e da sonda de SQL feita no fim dela): o editor de Query ainda é básico, o resultado não sai da tela e a navegação do banco é curta.
+
+| Marco | O que entra | Esforço | Situação |
+|---|---|---|---|
+| **M1. Editor de Query de verdade** | Cursor que anda (setas, Home, End, palavra), seleção com Shift e mouse, `Ctrl+A/C/X/V`, desfazer e refazer, rolagem, `Tab` recua; reaproveita o `TextBuffer` do `ox-editor` | M | Feito (10 testes da lógica; conferido na tela) |
+| **M2. Resultado que sai da tela** | Copiar célula, linha ou resultado (TSV), exportar a grade ou o resultado para CSV e JSON em arquivo | M | A fazer |
+| **M3. Ver mais do banco** | Lista de índices, triggers, funções e sequências (PostgreSQL e SQLite) na aba Estrutura e na barra lateral, com o texto da definição | M | A fazer |
+| **M4. Rodar com controle** | Botão de cancelar a query em andamento, histórico das queries (por conexão, com busca) e várias abas de Query | M | A fazer |
+| **M5. Sixel (terminal)** | Segundo protocolo de imagem, reaproveitando o desenho do Kitty | M | A fazer |
+| **M6. Lançamento 1.5.0** | Versão, README, tag, release conferida | P | Por último |
+
+### M1. Editor de Query de verdade
+- Trocar o texto que só cresce no fim por um `TextBuffer`: cursor em qualquer posição, seleção, copiar, recortar, colar, desfazer.
+- Mouse: clique põe o cursor, arrastar seleciona, duplo clique escolhe a palavra.
+- Pronto quando: testes do comportamento do cursor e da seleção na camada que liga o editor à tela; e a Query digitada, editada no meio e colada roda como esperado.
+
+### M2. Resultado que sai da tela
+- Copiar (`Ctrl+C` na célula ou linha escolhida) e exportar o resultado inteiro, não só a página; CSV com aspas e quebras de linha escapadas, JSON com valores nulos de verdade.
+- Pronto quando: testes com valores difíceis (vírgula, aspas, quebra de linha, acentos, nulo, texto "NULL") em CSV e JSON, e um arquivo exportado que o `sqlite3` e o `psql` consigam reler.
+
+### M3. Ver mais do banco
+- PostgreSQL pelo catálogo (`pg_indexes`, `pg_trigger`, `pg_proc`, `pg_sequences`) e SQLite pelo `sqlite_master`; mostrar a definição (`CREATE ...`) para ler e copiar.
+- Pronto quando: testes contra um PostgreSQL e um SQLite de verdade com índice, trigger, função e sequência criados nos testes.
+
+### M4. Rodar com controle
+- Cancelar de verdade (`pg_cancel_backend` pelo token de cancelamento, e interrupção no SQLite), sem fechar a conexão.
+- Histórico em `~/.config/brasa/` por conexão, sem guardar senha nem valores digitados em campos de senha; abas de Query independentes.
+- Pronto quando: teste que cancela um `pg_sleep` e um laço infinito e a conexão continua usável; histórico que sobrevive a fechar o app.
+
+### M5. Sixel (terminal)
+- Decodificar Sixel e desenhar como as imagens do Kitty (mesmos limites de tamanho e memória).
+- Pronto quando: `img2sixel` e `chafa -f sixel` mostram a imagem na proporção certa.
 
 ## 2.0.0 — Outros sistemas (G)
 - macOS e Windows. É a maior mudança: GPUI e o PTY precisam de ajustes em cada sistema.
