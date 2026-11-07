@@ -7,6 +7,7 @@ mod files_pane;
 mod folders;
 mod gsearch;
 mod histsearch;
+mod dbpane;
 mod ssh;
 mod icons;
 mod keys;
@@ -410,6 +411,7 @@ pub struct Workspace {
     pub corner_r: f32,
     /// gerenciador de arquivos em painel (criado ao abrir pela barra de widgets) e o fuso local
     pub files: Option<files_pane::FilesPane>,
+    pub db: Option<dbpane::DbPane>,
     pub tz_offset: i64,
     /// painel de desempenho clicado por último (recebe o contorno de foco); None = o terminal ativo
     pub focused_pane: Option<PaneKind>,
@@ -740,6 +742,7 @@ impl Workspace {
             corner_r: WINDOW_RADIUS - 1.0,
             focused_pane: None,
             files: None,
+            db: None,
             tz_offset: files_pane::local_offset(),
             caret_on: true,
             tick: 0,
@@ -822,6 +825,9 @@ impl Workspace {
                     Some(f) => f.reload(),
                     None => self.files = Some(files_pane::FilesPane::new(self.shell_cwd.clone())),
                 }
+            }
+            if kind == PaneKind::Db {
+                self.db.get_or_insert_with(dbpane::DbPane::default);
             }
             self.focused_pane = Some(kind);
         } else if self.focused_pane == Some(kind) {
@@ -1208,6 +1214,9 @@ impl Workspace {
         // (o editor do painel de notas tem prioridade quando está com o foco)
         let editing = self.focus_editor && self.show_notes && self.note_mode != NoteMode::View;
         if self.focused_pane == Some(PaneKind::Files) && !editing && !(m.control && m.shift) && self.on_files_key(k, cx) {
+            return;
+        }
+        if self.focused_pane == Some(PaneKind::Db) && !editing && !(m.control && m.shift) && self.on_db_key(k, cx) {
             return;
         }
 

@@ -16,6 +16,7 @@ ox-files = { path = "../../crates/ox-files" }
 ox-suggest = { path = "../../crates/ox-suggest" }
 ox-editor = { path = "../../crates/ox-editor" }
 ox-graphics = { path = "../../crates/ox-graphics" }
+ox-db = { path = "../../crates/ox-db" }
 # o mesmo `image` do GPUI: as imagens do terminal viram quadros dele
 image = { version = "0.25", default-features = false }
 

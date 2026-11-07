@@ -75,7 +75,7 @@ fn load_color(pct: f32) -> u32 {
 }
 
 /// Cor com transparência (0–255).
-fn with_alpha(color: u32, a: u8) -> gpui::Rgba {
+pub(crate) fn with_alpha(color: u32, a: u8) -> gpui::Rgba {
     rgba((color << 8) | a as u32)
 }
 
@@ -154,6 +154,7 @@ fn widget_glyph(kind: PaneKind, color: u32) -> AnyElement {
         PaneKind::Mem => bars_glyph(color).into_any_element(),
         PaneKind::Procs => wicon("block-bulletedlist", 17., color).into_any_element(),
         PaneKind::Files => wicon("folder-closed", 17., color).into_any_element(),
+        PaneKind::Db => wicon("database", 17., color).into_any_element(),
         PaneKind::Term(_) => wicon("terminal", 17., color).into_any_element(),
     }
 }
@@ -164,6 +165,7 @@ fn widget_title(kind: PaneKind) -> &'static str {
         PaneKind::Mem => "Memória",
         PaneKind::Procs => "Processos",
         PaneKind::Files => "Arquivos",
+        PaneKind::Db => "Banco",
         PaneKind::Term(_) => "Terminal",
     }
 }
@@ -262,7 +264,7 @@ fn line_chart(values: Vec<f32>, color: u32, w: f32, h: f32, unit: &str) -> Div {
 
 impl Workspace {
     /// Cor do contorno do painel em foco: a da seção ativa na barra lateral.
-    fn focus_color(&self) -> u32 {
+    pub(crate) fn focus_color(&self) -> u32 {
         match self.side {
             Side::Terminals => c_coral(),
             Side::Notes => c_amber(),
@@ -312,6 +314,7 @@ impl Workspace {
                     let title = if n > fit { format!("…{}", title.chars().skip(n - fit + 1).collect::<String>()) } else { title };
                     (self.render_files_pane(body_rect, cx), title, false)
                 }
+                PaneKind::Db => (self.render_db_pane(body_rect, cx), widget_title(kind).to_string(), false),
             };
             let is_focus = kind == focus_kind;
             if !multi {
@@ -324,6 +327,7 @@ impl Workspace {
                 PaneKind::Mem => usize::MAX - 1,
                 PaneKind::Procs => usize::MAX - 2,
                 PaneKind::Files => usize::MAX - 3,
+                PaneKind::Db => usize::MAX - 4,
             };
             let icon_color = if running { c_coral() } else if is_focus { accent } else { c_muted() };
             let header = div()
@@ -480,6 +484,10 @@ impl Workspace {
             .border_color(rgb(c_divider()))
             .child(item("w-files", PaneKind::Files, open(PaneKind::Files), FILES_BLUE).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.toggle_widget(PaneKind::Files);
+                cx.notify();
+            })))
+            .child(item("w-db", PaneKind::Db, open(PaneKind::Db), FILES_BLUE).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.toggle_widget(PaneKind::Db);
                 cx.notify();
             })))
             .child(item("w-cpu", PaneKind::Cpu, open(PaneKind::Cpu), c_peach()).on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -1080,7 +1088,7 @@ impl Workspace {
                                     f.selected = idx;
                                 }
                             }
-                            (Some(p), true) => this.open_files_entry(p.clone()),
+                            (Some(p), true) => this.open_files_entry(p.clone(), cx),
                         }
                         cx.notify();
                     }))
@@ -1128,7 +1136,11 @@ impl Workspace {
     }
 
     /// Abre uma entrada da tabela: pasta navega, imagem abre no visualizador, o resto no editor.
-    fn open_files_entry(&mut self, path: std::path::PathBuf) {
+    fn open_files_entry(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if !path.is_dir() && crate::dbpane::is_db_file(&path) {
+            self.open_database(path, cx);
+            return;
+        }
         let Some(f) = self.files.as_mut() else { return };
         if path.is_dir() {
             f.open_dir(path);
@@ -1237,7 +1249,7 @@ impl Workspace {
             "backspace" => f.go_back(),
             "enter" => {
                 if let Some(p) = f.selected.and_then(|i| f.rows.get(i)).map(|r| r.path.clone()) {
-                    self.open_files_entry(p);
+                    self.open_files_entry(p, cx);
                 }
             }
             _ => return false,

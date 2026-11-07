@@ -14,6 +14,8 @@ pub enum PaneKind {
     Procs,
     /// gerenciador de arquivos (com visualizador de imagens)
     Files,
+    /// editor de banco de dados (SQLite)
+    Db,
 }
 
 impl PaneKind {

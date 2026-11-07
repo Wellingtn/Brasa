@@ -6,6 +6,9 @@
 //!   (e entram entre aspas), e valores vão sempre como parâmetros;
 //! - toda consulta tem limite de linhas e tempo máximo, para uma consulta enorme ou infinita não travar o app.
 
+mod pg;
+pub use pg::{is_local_host, PgConfig, PgDatabase};
+
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -42,6 +45,12 @@ pub enum Error {
     NotOneRow(usize),
     #[error("só uma instrução por vez")]
     MultipleStatements,
+    #[error("usuário ou senha incorretos")]
+    Auth,
+    #[error("{0}")]
+    Connect(String),
+    #[error("conexão com {0} exige criptografia (TLS), que ainda não é suportada: use um servidor na própria máquina ou um túnel SSH (ssh -L)")]
+    RemoteNeedsTls(String),
     #[error("{0}")]
     Sql(String),
 }
@@ -127,6 +136,8 @@ pub struct Column {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Table {
+    /// esquema (PostgreSQL); `None` no SQLite
+    pub schema: Option<String>,
     pub name: String,
     pub is_view: bool,
     pub columns: Vec<Column>,
@@ -146,6 +157,14 @@ pub enum KeyKind {
 }
 
 impl Table {
+    /// Nome para mostrar: com o esquema, menos o `public`.
+    pub fn label(&self) -> String {
+        match self.schema.as_deref() {
+            Some(s) if s != "public" => format!("{s}.{}", self.name),
+            _ => self.name.clone(),
+        }
+    }
+
     pub fn key(&self) -> KeyKind {
         if self.is_view {
             return KeyKind::None;
@@ -164,7 +183,7 @@ impl Table {
 
 /// Há outra instrução depois do primeiro `;`? Respeita textos entre aspas, nomes entre aspas ou colchetes e
 /// comentários, e ignora `;` repetidos e espaços no fim. (O `rusqlite` descarta o resto em silêncio.)
-fn has_trailing_statement(sql: &str) -> bool {
+pub(crate) fn has_trailing_statement(sql: &str) -> bool {
     let b = sql.as_bytes();
     let (mut i, mut ended) = (0, false);
     while i < b.len() {
@@ -205,7 +224,7 @@ fn has_trailing_statement(sql: &str) -> bool {
 }
 
 /// Entre aspas, para usar como nome de tabela ou coluna (só depois de conferir que existe no esquema).
-fn quote(name: &str) -> String {
+pub(crate) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -290,7 +309,7 @@ impl Database {
             let mut il = self.conn.prepare(&format!("PRAGMA index_list({q})")).map_err(map_err)?;
             let indexes: Vec<String> = il.query_map([], |r| r.get::<_, String>(1)).map_err(map_err)?.collect::<Result<_, _>>().map_err(map_err)?;
             let without_rowid = sql.as_deref().is_some_and(|s| s.to_uppercase().contains("WITHOUT ROWID"));
-            out.push(Table { name, is_view: kind == "view", columns, indexes, without_rowid });
+            out.push(Table { schema: None, name, is_view: kind == "view", columns, indexes, without_rowid });
         }
         Ok(out)
     }
@@ -450,6 +469,64 @@ impl Database {
         let id = tx.last_insert_rowid();
         tx.commit().map_err(map_err)?;
         Ok(id)
+    }
+}
+
+/// Um banco aberto, de qualquer tipo. O painel só fala com isto.
+pub enum Db {
+    Sqlite(Database),
+    Postgres(PgDatabase),
+}
+
+impl Db {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Db::Sqlite(_) => "SQLite",
+            Db::Postgres(_) => "PostgreSQL",
+        }
+    }
+
+    /// De onde veio, para mostrar no cabeçalho.
+    pub fn label(&self) -> String {
+        match self {
+            Db::Sqlite(d) => d.path().display().to_string(),
+            Db::Postgres(d) => d.label(),
+        }
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Db::Sqlite(d) => d.is_read_only(),
+            Db::Postgres(_) => true,
+        }
+    }
+
+    pub fn schema(&mut self) -> Result<Vec<Table>, Error> {
+        match self {
+            Db::Sqlite(d) => d.schema(),
+            Db::Postgres(d) => d.schema(),
+        }
+    }
+
+    pub fn count_rows(&mut self, t: &Table) -> Result<i64, Error> {
+        match self {
+            Db::Sqlite(d) => d.count_rows(&t.name),
+            Db::Postgres(d) => d.count_rows(t),
+        }
+    }
+
+    pub fn page(&mut self, t: &Table, sort: Option<(&str, bool)>, offset: usize, limit: usize) -> Result<Page, Error> {
+        match self {
+            Db::Sqlite(d) => d.page(&t.name, sort, offset, limit),
+            Db::Postgres(d) => d.page(t, sort, offset, limit),
+        }
+    }
+
+    pub fn query(&mut self, sql: &str, limit: usize, timeout: Duration) -> Result<QueryResult, Error> {
+        match self {
+            Db::Sqlite(d) => d.query(sql, limit, timeout),
+            Db::Postgres(d) => d.query(sql, limit, timeout),
+        }
     }
 }
 

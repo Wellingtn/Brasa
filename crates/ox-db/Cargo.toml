@@ -6,6 +6,7 @@ license.workspace = true
 description = "Acesso a bancos SQLite: esquema, consultas com limite e tempo máximo e edição de linhas"
 
 [dependencies]
+postgres = "0.19"
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror.workspace = true
 

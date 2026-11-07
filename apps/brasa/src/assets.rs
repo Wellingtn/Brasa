@@ -35,6 +35,7 @@ static FILES: &[(&str, &[u8])] = &[
     ("icons/clock.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/clock.svg"))),
     ("icons/code-01.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/code-01.svg"))),
     ("icons/copy.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/copy.svg"))),
+    ("icons/database.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/database.svg"))),
     ("icons/dots-horizontal.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/dots-horizontal.svg"))),
     ("icons/dots-vertical.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/dots-vertical.svg"))),
     ("icons/edit-bold.svg", include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/icons/edit-bold.svg"))),

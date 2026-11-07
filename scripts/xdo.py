@@ -28,10 +28,10 @@ class Xdo:
         for m in reversed(mods): xtst.XTestFakeKeyEvent(ctypes.c_void_p(self.d), self._kc(m), 0, 0)
         self.flush()
     def type(self, text):
-        names = {" ": "space", "\n": "Return", "/": "slash", "-": "minus", ".": "period", "'": "apostrophe", "$": "dollar", "|": "bar", "~": "asciitilde", "#": "numbersign"}
+        names = {" ": "space", "\n": "Return", "/": "slash", "-": "minus", ".": "period", "'": "apostrophe", "$": "dollar", "|": "bar", "~": "asciitilde", "#": "numbersign", ",": "comma", ">": "greater", "<": "less", "(": "parenleft", ")": ")" and "parenright", "*": "asterisk", "=": "equal", ";": "semicolon", "'": "apostrophe"}
         for ch in text:
             n = names.get(ch, ch)
-            if ch.isupper() or ch in "$|~#": self.key(n, ("Shift_L",))
+            if ch.isupper() or ch in "$|~#><()*": self.key(n, ("Shift_L",))
             else: self.key(n)
 if __name__ == "__main__":
     # uso: xdo.py nudge | click X Y | type TEXTO | key NOME | wheel X Y up|down N | drag X1 Y1 X2 Y2

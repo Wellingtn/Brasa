@@ -106,23 +106,22 @@ Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (j
 
 ## 1.4.0 — Editor de banco de dados (G)
 
-Só SQLite nesta versão: é um arquivo, não precisa de servidor, senha nem rede, e dá para testar de verdade. PostgreSQL e MySQL ficam para uma versão própria, porque trazem conexão, senha e TLS.
+Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` conecta). No lugar da tabela desenhada com `|` e `-` do terminal, uma grade moderna, a mesma para os dois. MySQL fica para depois.
 
 | Marco | O que entra | Esforço | Situação |
 |---|---|---|---|
-| **M1. Motor SQLite** | Crate `ox-db`: abrir um arquivo (só leitura por padrão), listar tabelas, visões e colunas, rodar consulta com limite de linhas e tempo máximo, ler os tipos, inserir, alterar e apagar linha pela chave | M | Feito (15 testes com bancos de verdade) |
-| **M2. Painel Banco** | Painel novo na barra da direita: abrir `.sqlite`/`.db` (também pelo gerenciador de arquivos), lista de tabelas, grade com paginação e ordem, editor de SQL com `Ctrl+Enter`, resultado em grade | G | A fazer |
-| **M3. Edição na grade** | Editar célula, inserir e apagar linha com lista de mudanças pendentes, aplicar ou descartar, tudo numa transação; modo só leitura como padrão | M | A fazer |
-| **M4. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida, teste da atualização no AppImage | P | Por último |
+| **M1. Motor SQLite** | Crate `ox-db`: esquema, consulta com limite e tempo máximo, edição pela chave | M | Feito (15 testes) |
+| **M2. Painel Banco e conector PostgreSQL** | Painel na barra da direita com formulário de conexão (servidor, porta, usuário, senha, banco) ou arquivo SQLite; lista de tabelas, grade paginada e ordenável, editor de SQL com `Ctrl+Enter`; PostgreSQL pelo mesmo motor | G | Feito (24 testes no motor, 7 contra um PostgreSQL real; painel testado com os dois bancos) |
+| **M3. Edição na grade** | Editar célula, inserir e apagar linha com mudanças pendentes, aplicar ou descartar numa transação; só leitura como padrão | M | A fazer |
+| **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS; hoje só servidor local ou por túnel SSH | M | A fazer |
+| **M5. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida, teste da atualização no AppImage | P | Por último |
 
-### M1. Motor SQLite
-- `rusqlite` com o SQLite embutido (o mesmo comportamento em qualquer distribuição).
-- Abrir só leitura por padrão; abrir para escrita é uma escolha explícita.
-- Esquema: tabelas, visões, colunas (nome, tipo, chave primária, aceita nulo) e índices.
-- Consulta: no máximo N linhas (padrão 1000) avisando que cortou, tempo máximo com interrupção, valores em tipos próprios (nulo, inteiro, real, texto, bytes) e bytes mostrados como tamanho, não como texto.
-- Edição pela chave primária (ou `rowid`); tabela sem chave nenhuma não edita. Nada de montar SQL juntando texto do usuário: nomes de tabela e coluna validados contra o esquema, valores sempre como parâmetros.
-- Pronto quando: testes com bancos de verdade (criados nos testes) cobrem esquema, consulta, limite, tempo máximo, os cinco tipos, edição, tabela sem chave, arquivo que não é SQLite, arquivo travado e tentativas de injeção de SQL.
-- Achado no caminho: o `rusqlite` descarta em silêncio tudo depois do primeiro `;`, então o motor detecta a segunda instrução (respeitando aspas e comentários) e recusa.
+### M2. Painel Banco e conector PostgreSQL
+- Formulário de conexão no painel: servidor, porta (5432), usuário, senha, banco. A senha nunca é gravada em disco nem aparece na tela.
+- Aberto só para leitura (`default_transaction_read_only`) e com tempo máximo por consulta (`statement_timeout`).
+- Esta etapa conecta sem criptografia, então só aceita servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) ou por túnel SSH (`ssh -L`, que o Brasa já abre). Servidor remoto direto fica para o M4, com TLS.
+- Esquema pelo catálogo do PostgreSQL (`information_schema`); resultados em texto, como o `psql` mostra; consulta do editor com limite de linhas por cursor.
+- Pronto quando: testes contra um PostgreSQL de verdade (contêiner) cobrem conexão, senha errada, esquema, página, consulta, limite, tempo máximo e só leitura; e o painel abre um SQLite e um PostgreSQL e mostra a grade.\n- Como rodar os testes contra o PostgreSQL: `BRASA_TEST_PG=127.0.0.1:5432 BRASA_TEST_PG_PASSWORD=... cargo test -p ox-db` (sem as variáveis, esses testes passam sem fazer nada).\n- Limite assumido: a proteção de só leitura é contra acidente, não contra o próprio usuário (quem digita `SET default_transaction_read_only = off` no editor a desliga); o botão de edição do M3 será o jeito explícito.
 
 ## 2.0.0 — Outros sistemas (G)
 - macOS e Windows. É a maior mudança: GPUI e o PTY precisam de ajustes em cada sistema.
