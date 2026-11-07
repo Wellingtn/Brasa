@@ -2,10 +2,11 @@
 //! diagrama das relações e uma área de consulta fixa embaixo. As consultas rodam em segundo plano (a janela não
 //! congela) e todo banco abre só para leitura. O motor está no crate `ox-db`; a senha nunca é gravada.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, ScrollWheelEvent};
+use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
 use ox_db::{Database, Db, Kind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
 
 use crate::dbdiagram;
@@ -45,22 +46,24 @@ pub struct EditForm {
     pub user: String,
     pub dbname: String,
     pub path: String,
-    /// campo com o teclado: 0 nome; PostgreSQL: 1 servidor, 2 porta, 3 usuário, 4 banco; SQLite: 1 arquivo
+    /// PostgreSQL remoto com certificado próprio: arquivo PEM da CA (opcional)
+    pub ca: String,
+    /// campo com o teclado: 0 nome; PostgreSQL: 1 servidor, 2 porta, 3 usuário, 4 banco, 5 CA; SQLite: 1 arquivo
     pub focus: usize,
 }
 
 impl EditForm {
     fn new() -> Self {
-        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), focus: 0 }
+        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), ca: String::new(), focus: 0 }
     }
 
     fn from_saved(c: &SavedConn) -> Self {
-        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), focus: 0 }
+        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), ca: c.ca_file.clone(), focus: 0 }
     }
 
     fn count(&self) -> usize {
         if self.kind == Kind::Postgres {
-            5
+            6
         } else {
             2
         }
@@ -76,7 +79,8 @@ impl EditForm {
             (Kind::Postgres, 1) => &mut self.host,
             (Kind::Postgres, 2) => &mut self.port,
             (Kind::Postgres, 3) => &mut self.user,
-            (Kind::Postgres, _) => &mut self.dbname,
+            (Kind::Postgres, 4) => &mut self.dbname,
+            (Kind::Postgres, _) => &mut self.ca,
             (Kind::Sqlite, _) => &mut self.path,
         }
     }
@@ -91,7 +95,7 @@ impl EditForm {
                     return Err("preencha servidor, porta, usuário e banco".into());
                 }
                 let name = if self.name.trim().is_empty() { dbname.to_string() } else { self.name.trim().to_string() };
-                Ok(SavedConn { id: self.id, name, kind: Kind::Postgres, host: host.into(), port, user: user.into(), dbname: dbname.into(), path: String::new() })
+                Ok(SavedConn { id: self.id, name, kind: Kind::Postgres, host: host.into(), port, user: user.into(), dbname: dbname.into(), path: String::new(), ca_file: self.ca.trim().into() })
             }
             Kind::Sqlite => {
                 let path = self.path.trim();
@@ -100,7 +104,7 @@ impl EditForm {
                 }
                 let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("banco").to_string();
                 let name = if self.name.trim().is_empty() { stem } else { self.name.trim().to_string() };
-                Ok(SavedConn { id: self.id, name, kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: path.into() })
+                Ok(SavedConn { id: self.id, name, kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: path.into(), ca_file: String::new() })
             }
         }
     }
@@ -116,6 +120,15 @@ pub struct Manager {
     pub confirm_delete: Option<u64>,
     pub edit: Option<EditForm>,
     pub connecting: bool,
+}
+
+/// Arrasto de uma tabela no diagrama.
+pub struct Drag {
+    pub table: usize,
+    pub start_mouse: (f32, f32),
+    pub start_pos: (f32, f32),
+    /// já andou o bastante para ser um arrasto (e não um clique)
+    pub moved: bool,
 }
 
 pub struct DbPane {
@@ -138,6 +151,9 @@ pub struct DbPane {
     pub hscroll: f32,
     pub dg_x: f32,
     pub dg_y: f32,
+    /// posições escolhidas arrastando as tabelas do diagrama, por índice de tabela
+    pub moved: HashMap<usize, (f32, f32)>,
+    pub drag: Option<Drag>,
     pub sql: String,
     pub sql_focus: bool,
     pub result: Option<QueryResult>,
@@ -171,6 +187,8 @@ impl Default for DbPane {
             hscroll: 0.0,
             dg_x: 0.0,
             dg_y: 0.0,
+            moved: HashMap::new(),
+            drag: None,
             sql: "SELECT 1;".into(),
             sql_focus: false,
             result: None,
@@ -380,7 +398,7 @@ impl Workspace {
         }
         let Some(conn) = p.store.get(id).cloned() else { return };
         let password = std::mem::take(&mut p.manager.password);
-        let cfg = PgConfig { host: conn.host.clone(), port: conn.port, user: conn.user.clone(), password: (!password.is_empty()).then_some(password), dbname: conn.dbname.clone() };
+        let cfg = PgConfig { host: conn.host.clone(), port: conn.port, user: conn.user.clone(), password: (!password.is_empty()).then_some(password), dbname: conn.dbname.clone(), ca_file: (!conn.ca_file.trim().is_empty()).then(|| expand_home(conn.ca_file.trim())) };
         p.error = None;
         p.manager.connecting = true;
         p.epoch += 1;
@@ -466,7 +484,7 @@ impl Workspace {
         if p.active.is_some() || p.kind != "SQLite" {
             return;
         }
-        let id = p.store.upsert(SavedConn { id: 0, name: p.name.clone(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: p.label.clone() });
+        let id = p.store.upsert(SavedConn { id: 0, name: p.name.clone(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: p.label.clone(), ca_file: String::new() });
         p.active = Some(id);
         self.persist_store();
         cx.notify();
@@ -834,7 +852,7 @@ impl Workspace {
         let error = p.error.clone();
         let conns: Vec<SavedConn> = p.store.conns.clone();
         let scroll = p.dg_y.clamp(0.0, 4000.0);
-        let edit = p.manager.edit.as_ref().map(|f| (f.id, f.kind, f.focus, f.name.clone(), f.host.clone(), f.port.clone(), f.user.clone(), f.dbname.clone(), f.path.clone()));
+        let edit = p.manager.edit.as_ref().map(|f| (f.id, f.kind, f.focus, f.name.clone(), f.host.clone(), f.port.clone(), f.user.clone(), f.dbname.clone(), f.path.clone(), f.ca.clone()));
         let width = (r.w - 64.0).clamp(240.0, 1100.0);
 
         // um campo de texto do formulário; clicar nele dá o foco do teclado
@@ -895,7 +913,7 @@ impl Workspace {
         }
 
         // formulário de nova conexão ou edição
-        if let Some((id, kind, focus, name, host, port, user, dbname, path)) = edit {
+        if let Some((id, kind, focus, name, host, port, user, dbname, path, ca)) = edit {
             let seg = |sid: &'static str, label: &'static str, k: Kind, cx: &mut Context<Self>| {
                 let on = kind == k;
                 div()
@@ -928,7 +946,8 @@ impl Workspace {
                 form = form
                     .child(div().flex().gap_2().child(field("Servidor", host, 1, focus, cx)).child(div().flex_none().w(px(80.)).flex().child(field("Porta", port, 2, focus, cx))))
                     .child(div().flex().gap_2().child(field("Usuário", user, 3, focus, cx)).child(field("Banco", dbname, 4, focus, cx)))
-                    .child(div().text_size(px(11.)).text_color(rgb(c_disabled())).child("Servidor remoto: por enquanto use um túnel SSH (ssh -L) e conecte em localhost."));
+                    .child(div().flex().child(field("Certificado da CA (opcional, .pem)", ca, 5, focus, cx)))
+                    .child(div().text_size(px(11.)).text_color(rgb(c_disabled())).child("Servidor em outra máquina: a conexão é criptografada (TLS) e o certificado é conferido. Se for um certificado próprio, informe o arquivo da CA."));
             } else {
                 form = form.child(div().flex().child(field("Arquivo", path, 1, focus, cx)));
             }
@@ -1479,7 +1498,7 @@ impl Workspace {
         let accent = self.focus_color();
         let mono = self.mono.clone();
         let p = self.db.as_ref().expect("painel aberto");
-        let lay = dbdiagram::layout(&p.tables);
+        let lay = dbdiagram::layout(&p.tables, &p.moved);
         let selected = p.selected;
         let (dx, dy) = (p.dg_x.clamp(0.0, (lay.width - view.0).max(0.0)), p.dg_y.clamp(0.0, (lay.height - view.1).max(0.0)));
         let mut host = div().absolute().left(px(-dx)).top(px(-dy)).w(px(lay.width.max(view.0))).h(px(lay.height.max(view.1)));
@@ -1494,8 +1513,10 @@ impl Workspace {
             }
             host = host.child(div().absolute().left(px(e.tip.0 + 1.0)).top(px(e.tip.1 - 9.0)).text_size(px(12.)).text_color(rgb(color)).child("◀"));
         }
-        for (i, pl) in lay.placed.iter().enumerate() {
-            let Some(pl) = pl else { continue };
+        // a tabela selecionada (a que está sendo arrastada) é desenhada por último, para ficar por cima das outras
+        let order: Vec<usize> = (0..lay.placed.len()).filter(|&i| selected != Some(i)).chain(selected.filter(|&i| i < lay.placed.len())).collect();
+        for i in order {
+            let Some(pl) = &lay.placed[i] else { continue };
             let t = &p.tables[i];
             let on = selected == Some(i);
             let shown = t.columns.len().min(dbdiagram::MAX_ROWS);
@@ -1541,10 +1562,16 @@ impl Workspace {
             if t.columns.len() > shown {
                 card = card.child(div().flex_none().h(px(dbdiagram::ROW_H)).px(px(12.)).flex().items_center().text_size(px(11.)).text_color(rgb(c_muted())).child(format!("+ {} colunas", t.columns.len() - shown)));
             }
-            host = host.child(card.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.focused_pane = Some(PaneKind::Db);
-                this.db_select_table(i, View::Diagram, cx);
-            })));
+            let (px0, py0) = (pl.x, pl.y);
+            host = host.child(card.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
+                    if let Some(p) = this.db.as_mut() {
+                        p.drag = Some(Drag { table: i, start_mouse: (f32::from(ev.position.x), f32::from(ev.position.y)), start_pos: (px0, py0), moved: false });
+                    }
+                    cx.stop_propagation();
+                }),
+            ));
         }
         let empty = lay.placed.iter().all(|p| p.is_none());
         div()
@@ -1567,6 +1594,44 @@ impl Workspace {
                 }
                 cx.notify();
             }))
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                if let Some(p) = this.db.as_mut() {
+                    if let Some(d) = p.drag.as_mut() {
+                        if ev.pressed_button != Some(MouseButton::Left) {
+                            p.drag = None;
+                        } else {
+                            let (dx, dy) = (f32::from(ev.position.x) - d.start_mouse.0, f32::from(ev.position.y) - d.start_mouse.1);
+                            if d.moved || dx.abs() + dy.abs() > 4.0 {
+                                d.moved = true;
+                                let pos = ((d.start_pos.0 + dx).max(0.0), (d.start_pos.1 + dy).max(0.0));
+                                let t = d.table;
+                                p.moved.insert(t, pos);
+                            }
+                            cx.notify();
+                        }
+                    }
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    // sem ter andado, foi um clique: seleciona a tabela
+                    let click = this.db.as_mut().and_then(|p| p.drag.take()).filter(|d| !d.moved).map(|d| d.table);
+                    if let Some(i) = click {
+                        this.db_select_table(i, View::Diagram, cx);
+                    }
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    if let Some(p) = this.db.as_mut() {
+                        p.drag = None;
+                    }
+                    cx.notify();
+                }),
+            )
             .child(host)
             .when(empty, |d| d.child(div().p_3().text_size(px(12.)).text_color(rgb(c_muted())).child("O banco não tem tabelas para desenhar.")))
             .into_any_element()

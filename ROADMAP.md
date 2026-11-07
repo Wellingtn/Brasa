@@ -113,14 +113,14 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 | **M1. Motor SQLite** | Crate `ox-db`: esquema, consulta com limite e tempo máximo, edição pela chave | M | Feito (15 testes) |
 | **M2. Página Banco e conector PostgreSQL** | Página que ocupa o lugar do terminal (como as Configurações), aberta pelo botão Banco da barra da direita: tabela de conexões salvas (conectar, editar, excluir, nova), lista de tabelas, abas Dados, Estrutura, Diagrama e Resultado, consulta fixa embaixo com `Ctrl+Enter`; PostgreSQL e SQLite pelo mesmo motor | G | Feito (30 testes no motor, 8 contra um PostgreSQL real; página testada com os dois bancos) |
 | **M3. Edição na grade** | Editar célula, inserir e apagar linha com mudanças pendentes, aplicar ou descartar numa transação; só leitura como padrão | M | A fazer |
-| **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS; hoje só servidor local ou por túnel SSH | M | A fazer |
+| **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS | M | Feito junto com o M2 e os ajustes (TLS testado contra um servidor real) |
 | **M5. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida, teste da atualização no AppImage | P | Por último |
 
 ### M2. Painel Banco e conector PostgreSQL
 - Conexões salvas em `~/.config/brasa/databases.json` (nome, tipo, servidor, porta, usuário, banco ou arquivo; modo 0600). A senha é pedida ao conectar, nunca é gravada em disco e nem existe como campo no arquivo.
-- Diagrama: tabelas em colunas (quem é referenciado fica à esquerda) e setas das chaves estrangeiras, que se destacam na tabela selecionada; a posição é calculada, não arrastável ainda.
+- Diagrama: tabelas em colunas (quem é referenciado fica à esquerda) e setas das chaves estrangeiras, que se destacam na tabela selecionada; as tabelas podem ser arrastadas e as setas acompanham (a posição vale enquanto a página está aberta; não é gravada).
 - Aberto só para leitura (`default_transaction_read_only`) e com tempo máximo por consulta (`statement_timeout`).
-- Esta etapa conecta sem criptografia, então só aceita servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) ou por túnel SSH (`ssh -L`, que o Brasa já abre). Servidor remoto direto fica para o M4, com TLS.
+- Servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) conecta sem criptografia; qualquer outro **exige TLS**, com o certificado conferido (emissor, nome e validade) contra os certificados do sistema e, se a conexão tiver, contra um arquivo PEM de CA. Sem TLS, a conexão nem é tentada. Mensagens claras para CA desconhecida, nome que não bate e certificado vencido.
 - Esquema pelo catálogo do PostgreSQL (`information_schema`); resultados em texto, como o `psql` mostra; consulta do editor com limite de linhas por cursor.
 - Pronto quando: testes contra um PostgreSQL de verdade (contêiner) cobrem conexão, senha errada, esquema, página, consulta, limite, tempo máximo e só leitura; e o painel abre um SQLite e um PostgreSQL e mostra a grade.\n- Como rodar os testes contra o PostgreSQL: `BRASA_TEST_PG=127.0.0.1:5432 BRASA_TEST_PG_PASSWORD=... cargo test -p ox-db` (sem as variáveis, esses testes passam sem fazer nada).\n- Limite assumido: a proteção de só leitura é contra acidente, não contra o próprio usuário (quem digita `SET default_transaction_read_only = off` no editor a desliga); o botão de edição do M3 será o jeito explícito.
 

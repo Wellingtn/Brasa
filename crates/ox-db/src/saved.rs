@@ -31,6 +31,9 @@ pub struct SavedConn {
     /// caminho do arquivo (SQLite)
     #[serde(default)]
     pub path: String,
+    /// arquivo PEM com a CA do servidor PostgreSQL remoto, quando o certificado é próprio (opcional)
+    #[serde(default)]
+    pub ca_file: String,
 }
 
 impl SavedConn {
@@ -123,7 +126,7 @@ mod tests {
     use super::*;
 
     fn pg(name: &str) -> SavedConn {
-        SavedConn { id: 0, name: name.into(), kind: Kind::Postgres, host: "localhost".into(), port: 5432, user: "ana".into(), dbname: name.into(), path: String::new() }
+        SavedConn { id: 0, name: name.into(), kind: Kind::Postgres, host: "localhost".into(), port: 5432, user: "ana".into(), dbname: name.into(), path: String::new(), ca_file: String::new() }
     }
 
     #[test]
@@ -148,7 +151,7 @@ mod tests {
         let path = d.path().join("cfg").join("databases.json");
         let mut s = Store::default();
         s.upsert(pg("loja"));
-        s.upsert(SavedConn { id: 0, name: "vendas".into(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: "/x/v.sqlite".into() });
+        s.upsert(SavedConn { id: 0, name: "vendas".into(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: "/x/v.sqlite".into(), ca_file: String::new() });
         s.save(&path).unwrap();
         let (back, err) = Store::load(&path);
         assert_eq!((back, err), (s, None));

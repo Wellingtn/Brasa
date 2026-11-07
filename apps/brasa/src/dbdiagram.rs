@@ -4,6 +4,8 @@
 //! direita da mais à direita das que ela referencia. A seta sai do lado esquerdo da tabela que tem a chave
 //! estrangeira e chega no lado direito da tabela referenciada, em segmentos horizontais e verticais.
 
+use std::collections::HashMap;
+
 use ox_db::Table;
 
 pub const CARD_W: f32 = 224.0;
@@ -62,7 +64,9 @@ fn find(tables: &[Table], schema: &Option<String>, name: &str, from: &Table) -> 
     tables.iter().position(|t| !t.is_view && t.name == name && (schema.is_none() || t.schema == *schema || (t.schema.is_none() && from.schema.is_none())))
 }
 
-pub fn layout(tables: &[Table]) -> Layout {
+/// `moved`: posição (x, y) que a pessoa escolheu arrastando, por índice de tabela; vale no lugar da calculada, e as
+/// setas são traçadas de novo a partir dela.
+pub fn layout(tables: &[Table], moved: &HashMap<usize, (f32, f32)>) -> Layout {
     let n = tables.len();
     // relações (filho, pai), sem visões, sem referência a si mesma e sem tabela desconhecida
     let mut rel: Vec<(usize, usize)> = Vec::new();
@@ -106,6 +110,15 @@ pub fn layout(tables: &[Table]) -> Layout {
             placed[i] = Some(p);
         }
     }
+
+    for (i, p) in placed.iter_mut().enumerate() {
+        if let (Some(p), Some(&(x, y))) = (p.as_mut(), moved.get(&i)) {
+            p.x = x.max(0.0);
+            p.y = y.max(0.0);
+        }
+    }
+    width = placed.iter().flatten().map(|p| p.right()).fold(width, f32::max);
+    height = placed.iter().flatten().map(|p| p.y + p.h).fold(height, f32::max);
 
     // setas; as que saem ou chegam no mesmo lado se espalham um pouco para não ficarem em cima umas das outras
     let (mut out_count, mut in_count) = (vec![0usize; n], vec![0usize; n]);
@@ -168,7 +181,7 @@ mod tests {
     #[test]
     fn tables_sit_one_column_right_of_what_they_reference() {
         let t = shop();
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         let x = |n: &str| l.placed[t.iter().position(|x| x.name == n).unwrap()].unwrap().x;
         assert_eq!(x("clientes"), MARGIN);
         assert_eq!(x("categorias"), MARGIN);
@@ -180,7 +193,7 @@ mod tests {
     #[test]
     fn cards_in_a_column_never_overlap() {
         let t = shop();
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         let ps: Vec<Placed> = l.placed.iter().flatten().copied().collect();
         for (i, a) in ps.iter().enumerate() {
             for b in ps.iter().skip(i + 1) {
@@ -194,7 +207,7 @@ mod tests {
     #[test]
     fn arrows_run_from_the_fk_table_to_the_referenced_one() {
         let t = shop();
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         assert_eq!(l.edges.len(), 4);
         let idx = |n: &str| t.iter().position(|x| x.name == n).unwrap();
         let e = l.edges.iter().find(|e| e.from == idx("pedidos") && e.to == idx("clientes")).unwrap();
@@ -218,7 +231,7 @@ mod tests {
         let mut t = shop();
         t.push(Table { is_view: true, ..table("v_clientes", 2, &[("c0", "clientes")]) });
         t.push(table("arvore", 3, &[("c1", "arvore"), ("c2", "nao_existe")]));
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         assert_eq!(l.edges.len(), 4, "a visão, a auto-referência e a tabela inexistente não geram seta");
         assert!(l.placed[5].is_none(), "visão fora do diagrama");
         assert!(l.placed[6].is_some());
@@ -227,7 +240,7 @@ mod tests {
     #[test]
     fn a_cycle_terminates_and_still_draws_both_arrows() {
         let t = vec![table("a", 2, &[("c1", "b")]), table("b", 2, &[("c1", "a")])];
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         assert_eq!(l.edges.len(), 2);
         assert!(l.placed.iter().all(|p| p.is_some()));
         for e in &l.edges {
@@ -240,7 +253,7 @@ mod tests {
     #[test]
     fn many_columns_are_cut_and_arrows_on_one_edge_are_spread() {
         let t = vec![table("grande", 25, &[]), table("filho", 3, &[("c1", "grande"), ("c2", "grande")]), table("filho2", 3, &[("c1", "grande")])];
-        let l = layout(&t);
+        let l = layout(&t, &HashMap::new());
         let h = l.placed[0].unwrap().h;
         assert_eq!(h, HEAD_H + (MAX_ROWS + 1) as f32 * ROW_H + 10.0);
         // as duas setas de "filho" para "grande" são uma só relação; as que chegam em "grande" têm alturas diferentes
@@ -250,8 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_table_keeps_its_place_and_its_arrows_follow() {
+        let t = shop();
+        let idx = |n: &str| t.iter().position(|x| x.name == n).unwrap();
+        let base = layout(&t, &HashMap::new());
+        let (cli, ped) = (idx("clientes"), idx("pedidos"));
+        let before = base.edges.iter().find(|e| e.from == ped && e.to == cli).unwrap().clone();
+        // pedidos vai para mais embaixo e mais à direita
+        let moved = HashMap::from([(ped, (700.0, 500.0))]);
+        let l = layout(&t, &moved);
+        let p = l.placed[ped].unwrap();
+        assert_eq!((p.x, p.y), (700.0, 500.0));
+        assert_eq!((p.w, p.h), (base.placed[ped].unwrap().w, base.placed[ped].unwrap().h));
+        // a seta de pedidos para clientes sai do lado esquerdo da nova posição e ainda chega em clientes
+        let after = l.edges.iter().find(|e| e.from == ped && e.to == cli).unwrap();
+        assert_ne!(after, &before);
+        assert_eq!(after.segs.first().unwrap().0, 700.0);
+        assert_eq!(after.tip.0, l.placed[cli].unwrap().right());
+        for s in &after.segs {
+            assert!(s.0 == s.2 || s.1 == s.3);
+        }
+        // as outras tabelas não se mexeram, e o desenho cresce para caber
+        assert_eq!(l.placed[cli], base.placed[cli]);
+        assert!(l.height >= 500.0 + p.h && l.width >= 700.0 + p.w);
+        // posição negativa é presa em zero
+        let neg = layout(&t, &HashMap::from([(cli, (-50.0, -9.0))]));
+        assert_eq!((neg.placed[cli].unwrap().x, neg.placed[cli].unwrap().y), (0.0, 0.0));
+        // arrastar para um índice que não existe não faz nada
+        assert_eq!(layout(&t, &HashMap::from([(99, (1.0, 1.0))])), base);
+    }
+
+    #[test]
     fn an_empty_database_has_an_empty_layout() {
-        let l = layout(&[]);
+        let l = layout(&[], &HashMap::new());
         assert!(l.placed.is_empty() && l.edges.is_empty());
     }
 }

@@ -53,8 +53,6 @@ pub enum Error {
     PasswordRequired,
     #[error("{0}")]
     Connect(String),
-    #[error("conexão com {0} exige criptografia (TLS), que ainda não é suportada: use um servidor na própria máquina ou um túnel SSH (ssh -L)")]
-    RemoteNeedsTls(String),
     #[error("{0}")]
     Sql(String),
 }

@@ -1,13 +1,16 @@
 //! PostgreSQL pelo protocolo simples (o mesmo do `psql`): todo valor chega como texto, e `NULL` como nulo.
 //!
 //! Abre só para leitura (`default_transaction_read_only`) e com tempo máximo por consulta (`statement_timeout`).
-//! Esta versão conecta sem criptografia, então só aceita servidor na própria máquina ou por túnel SSH:
-//! mandar senha e dados em claro por uma rede seria pior que não ter o recurso.
+//! Servidor na própria máquina conecta sem criptografia; qualquer outro exige TLS, com o certificado conferido
+//! (nome e emissor) contra os certificados do sistema e, se a conexão tiver, contra a CA de um arquivo PEM.
+//! Nunca se manda senha nem dados em claro por uma rede.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use postgres::error::SqlState;
+use postgres::config::SslMode;
 use postgres::{Client, Config, NoTls, SimpleQueryMessage};
 
 use crate::{has_trailing_statement, quote, Column, Error, ForeignKey, Page, QueryResult, Table, Value};
@@ -23,11 +26,54 @@ pub struct PgConfig {
     /// só vive na memória; nunca é gravada
     pub password: Option<String>,
     pub dbname: String,
+    /// arquivo PEM com a CA que assinou o certificado do servidor (para certificado próprio)
+    pub ca_file: Option<String>,
 }
 
 impl Default for PgConfig {
     fn default() -> Self {
-        Self { host: "localhost".into(), port: 5432, user: "postgres".into(), password: None, dbname: "postgres".into() }
+        Self { host: "localhost".into(), port: 5432, user: "postgres".into(), password: None, dbname: "postgres".into(), ca_file: None }
+    }
+}
+
+/// Conector TLS: certificados do sistema mais, se houver, os do arquivo PEM da conexão.
+fn make_tls(ca_file: Option<&str>) -> Result<tokio_postgres_rustls::MakeRustlsConnect, Error> {
+    let mut roots = rustls::RootCertStore::empty();
+    let native = rustls_native_certs::load_native_certs();
+    roots.add_parsable_certificates(native.certs);
+    if let Some(path) = ca_file.filter(|p| !p.trim().is_empty()) {
+        let pem = std::fs::read(path).map_err(|e| Error::Connect(format!("não consegui ler o arquivo da CA ({path}): {e}")))?;
+        let certs: Vec<_> = rustls_pemfile::certs(&mut pem.as_slice()).filter_map(Result::ok).collect();
+        if certs.is_empty() {
+            return Err(Error::Connect(format!("o arquivo da CA ({path}) não tem nenhum certificado PEM")));
+        }
+        let (added, _) = roots.add_parsable_certificates(certs);
+        if added == 0 {
+            return Err(Error::Connect(format!("o arquivo da CA ({path}) não tem nenhum certificado válido")));
+        }
+    }
+    if roots.is_empty() {
+        return Err(Error::Connect("não há certificados de CA para conferir o servidor: informe o arquivo da CA".into()));
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| Error::Connect(e.to_string()))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(tokio_postgres_rustls::MakeRustlsConnect::new(config))
+}
+
+/// Mensagem legível para falhas de certificado.
+fn tls_hint(e: &postgres::Error) -> Option<Error> {
+    let text = format!("{e:?}");
+    if text.contains("UnknownIssuer") {
+        Some(Error::Connect("o certificado do servidor não é de uma CA conhecida: informe o arquivo da CA (.pem) nesta conexão".into()))
+    } else if text.contains("NotValidForName") || text.contains("NotValidForNameContext") {
+        Some(Error::Connect("o certificado do servidor não vale para este endereço: use o nome que consta no certificado".into()))
+    } else if text.contains("Expired") {
+        Some(Error::Connect("o certificado do servidor está vencido".into()))
+    } else {
+        None
     }
 }
 
@@ -86,9 +132,6 @@ fn collect(msgs: Vec<SimpleQueryMessage>) -> (Vec<String>, Vec<Vec<Value>>, Opti
 
 impl PgDatabase {
     pub fn connect(cfg: &PgConfig) -> Result<PgDatabase, Error> {
-        if !is_local_host(&cfg.host) {
-            return Err(Error::RemoteNeedsTls(cfg.host.clone()));
-        }
         let timeout_ms = 10_000;
         let mut c = Config::new();
         c.host(&cfg.host).port(cfg.port).user(&cfg.user).dbname(&cfg.dbname).connect_timeout(CONNECT_TIMEOUT).application_name("brasa");
@@ -96,13 +139,21 @@ impl PgDatabase {
         if let Some(p) = &cfg.password {
             c.password(p);
         }
-        let client = c.connect(NoTls).map_err(|e| {
+        let result = if is_local_host(&cfg.host) {
+            c.ssl_mode(SslMode::Disable);
+            c.connect(NoTls)
+        } else {
+            // fora desta máquina, só com TLS: sem criptografia a conexão nem é tentada
+            c.ssl_mode(SslMode::Require);
+            c.connect(make_tls(cfg.ca_file.as_deref())?)
+        };
+        let client = result.map_err(|e| {
             // sem senha, o cliente só diz "invalid configuration"; a causa é a senha que faltou
             let missing = std::error::Error::source(&e).is_some_and(|s| s.to_string().contains("password missing"));
             if missing && cfg.password.is_none() {
                 Error::PasswordRequired
             } else {
-                map_pg(e)
+                tls_hint(&e).unwrap_or_else(|| map_pg(e))
             }
         })?;
         Ok(PgDatabase { client, cfg: PgConfig { password: None, ..cfg.clone() }, timeout_ms })
@@ -274,9 +325,15 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_server_is_refused_before_any_connection() {
-        let cfg = PgConfig { host: "db.exemplo.com".into(), ..PgConfig::default() };
-        assert_eq!(PgDatabase::connect(&cfg).err(), Some(Error::RemoteNeedsTls("db.exemplo.com".into())));
+    fn a_missing_or_bad_ca_file_is_reported_before_connecting() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(matches!(make_tls(Some("/nao/existe/ca.pem")), Err(Error::Connect(m)) if m.contains("não consegui ler")));
+        let vazio = d.path().join("vazio.pem");
+        std::fs::write(&vazio, "isto não é um certificado").unwrap();
+        assert!(matches!(make_tls(Some(vazio.to_str().unwrap())), Err(Error::Connect(m)) if m.contains("nenhum certificado PEM")));
+        // um servidor remoto com CA ruim falha na CA, sem tentar a rede
+        let cfg = PgConfig { host: "db.exemplo.com".into(), ca_file: Some(vazio.to_string_lossy().into_owned()), ..PgConfig::default() };
+        assert!(matches!(PgDatabase::connect(&cfg), Err(Error::Connect(m)) if m.contains("CA")));
     }
 }
 
@@ -289,7 +346,7 @@ mod live {
     fn cfg() -> Option<PgConfig> {
         let target = std::env::var("BRASA_TEST_PG").ok()?;
         let (host, port) = target.split_once(':')?;
-        Some(PgConfig { host: host.into(), port: port.parse().ok()?, user: "postgres".into(), password: std::env::var("BRASA_TEST_PG_PASSWORD").ok(), dbname: std::env::var("BRASA_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()) })
+        Some(PgConfig { host: host.into(), port: port.parse().ok()?, user: "postgres".into(), password: std::env::var("BRASA_TEST_PG_PASSWORD").ok(), ca_file: None, dbname: std::env::var("BRASA_TEST_PG_DB").unwrap_or_else(|_| "postgres".into()) })
     }
 
     const T: Duration = Duration::from_secs(5);
@@ -405,5 +462,71 @@ mod live {
         // a senha nunca aparece nas mensagens
         let e = PgDatabase::connect(&PgConfig { password: Some("segredo-xyz".into()), port: 1, ..cfg }).err().unwrap().to_string();
         assert!(!e.contains("segredo-xyz"), "{e}");
+    }
+}
+
+/// Testes de TLS contra um PostgreSQL remoto de verdade. Rodam só com `BRASA_TEST_PG_TLS=servidor:porta`,
+/// `BRASA_TEST_PG_CA` (CA que assinou o certificado), `BRASA_TEST_PG_OTHER_CA` (outra CA) e a senha em
+/// `BRASA_TEST_PG_PASSWORD`. O servidor não pode ser local, senão a conexão nem usa TLS.
+#[cfg(test)]
+mod live_tls {
+    use super::*;
+
+    fn cfg() -> Option<(PgConfig, String, String)> {
+        let target = std::env::var("BRASA_TEST_PG_TLS").ok()?;
+        let (host, port) = target.split_once(':')?;
+        let ca = std::env::var("BRASA_TEST_PG_CA").ok()?;
+        let other = std::env::var("BRASA_TEST_PG_OTHER_CA").ok()?;
+        let c = PgConfig { host: host.into(), port: port.parse().ok()?, user: "postgres".into(), password: std::env::var("BRASA_TEST_PG_PASSWORD").ok(), dbname: "postgres".into(), ca_file: None };
+        Some((c, ca, other))
+    }
+
+    #[test]
+    fn a_remote_server_is_reached_over_tls_with_its_ca() {
+        let Some((cfg, ca, _)) = cfg() else { return };
+        assert!(!is_local_host(&cfg.host), "o teste precisa de um servidor que não seja local");
+        let mut db = PgDatabase::connect(&PgConfig { ca_file: Some(ca), ..cfg }).unwrap();
+        // o próprio servidor confirma que esta sessão está criptografada
+        let r = db.query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()", 1, Duration::from_secs(5)).unwrap();
+        assert_eq!(r.rows[0][0], Value::Text("t".into()));
+        assert!(db.query("DELETE FROM pg_class", 1, Duration::from_secs(5)).is_err()); // continua só leitura
+    }
+
+    #[test]
+    fn without_the_ca_the_certificate_is_not_trusted() {
+        let Some((cfg, _, _)) = cfg() else { return };
+        match PgDatabase::connect(&cfg) {
+            Err(Error::Connect(m)) => assert!(m.contains("CA conhecida"), "{m}"),
+            other => panic!("esperava recusa do certificado, veio {:?}", other.err()),
+        }
+    }
+
+    #[test]
+    fn a_different_ca_does_not_make_it_trusted() {
+        let Some((cfg, _, other)) = cfg() else { return };
+        match PgDatabase::connect(&PgConfig { ca_file: Some(other), ..cfg }) {
+            Err(Error::Connect(m)) => assert!(m.contains("CA conhecida"), "{m}"),
+            other => panic!("esperava recusa do certificado, veio {:?}", other.err()),
+        }
+    }
+
+    /// `BRASA_TEST_PG_TLS_BADNAME=outro-endereço:porta`: o mesmo servidor por um endereço que não está no certificado.
+    #[test]
+    fn a_certificate_that_does_not_cover_the_address_is_refused() {
+        let Some((cfg, ca, _)) = cfg() else { return };
+        let Ok(bad) = std::env::var("BRASA_TEST_PG_TLS_BADNAME") else { return };
+        let (host, port) = bad.split_once(':').unwrap();
+        let c = PgConfig { host: host.into(), port: port.parse().unwrap(), ca_file: Some(ca), ..cfg };
+        match PgDatabase::connect(&c) {
+            Err(Error::Connect(m)) => assert!(m.contains("não vale para este endereço"), "{m}"),
+            other => panic!("esperava recusa por nome, veio {:?}", other.err()),
+        }
+    }
+
+    #[test]
+    fn a_wrong_password_over_tls_is_still_reported_as_such() {
+        let Some((cfg, ca, _)) = cfg() else { return };
+        assert_eq!(PgDatabase::connect(&PgConfig { ca_file: Some(ca.clone()), password: Some("errada".into()), ..cfg.clone() }).err(), Some(Error::Auth));
+        assert_eq!(PgDatabase::connect(&PgConfig { ca_file: Some(ca), password: None, ..cfg }).err(), Some(Error::PasswordRequired));
     }
 }
