@@ -2,12 +2,12 @@
 //! diagrama das relações e uma área de consulta fixa embaixo. As consultas rodam em segundo plano (a janela não
 //! congela) e todo banco abre só para leitura. O motor está no crate `ox-db`; a senha nunca é gravada.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
-use ox_db::{Database, Db, Kind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
+use ox_db::{Change, Database, Db, Kind, KeyKind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
 
 use crate::dbdiagram;
 use crate::icons::wicon;
@@ -24,6 +24,7 @@ const BAR_H: f32 = 40.0;
 const TABS_H: f32 = 40.0;
 const FOOT_H: f32 = 32.0;
 const SPLIT_H: f32 = 10.0;
+const EDIT_BAR_H: f32 = 40.0;
 const DOCK_H: f32 = 210.0;
 /// largura média de um caractere do texto monoespaçado da grade (12 px)
 const CHAR_W: f32 = 7.3;
@@ -48,17 +49,19 @@ pub struct EditForm {
     pub path: String,
     /// PostgreSQL remoto com certificado próprio: arquivo PEM da CA (opcional)
     pub ca: String,
+    /// abrir só para leitura
+    pub read_only: bool,
     /// campo com o teclado: 0 nome; PostgreSQL: 1 servidor, 2 porta, 3 usuário, 4 banco, 5 CA; SQLite: 1 arquivo
     pub focus: usize,
 }
 
 impl EditForm {
     fn new() -> Self {
-        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), ca: String::new(), focus: 0 }
+        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), ca: String::new(), read_only: false, focus: 0 }
     }
 
     fn from_saved(c: &SavedConn) -> Self {
-        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), ca: c.ca_file.clone(), focus: 0 }
+        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), ca: c.ca_file.clone(), read_only: c.read_only, focus: 0 }
     }
 
     fn count(&self) -> usize {
@@ -95,7 +98,7 @@ impl EditForm {
                     return Err("preencha servidor, porta, usuário e banco".into());
                 }
                 let name = if self.name.trim().is_empty() { dbname.to_string() } else { self.name.trim().to_string() };
-                Ok(SavedConn { id: self.id, name, kind: Kind::Postgres, host: host.into(), port, user: user.into(), dbname: dbname.into(), path: String::new(), ca_file: self.ca.trim().into() })
+                Ok(SavedConn { id: self.id, name, kind: Kind::Postgres, host: host.into(), port, user: user.into(), dbname: dbname.into(), path: String::new(), ca_file: self.ca.trim().into(), read_only: self.read_only })
             }
             Kind::Sqlite => {
                 let path = self.path.trim();
@@ -104,7 +107,7 @@ impl EditForm {
                 }
                 let stem = Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("banco").to_string();
                 let name = if self.name.trim().is_empty() { stem } else { self.name.trim().to_string() };
-                Ok(SavedConn { id: self.id, name, kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: path.into(), ca_file: String::new() })
+                Ok(SavedConn { id: self.id, name, kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: path.into(), ca_file: String::new(), read_only: self.read_only })
             }
         }
     }
@@ -120,6 +123,27 @@ pub struct Manager {
     pub confirm_delete: Option<u64>,
     pub edit: Option<EditForm>,
     pub connecting: bool,
+}
+
+/// Célula da grade com o teclado (editando o texto).
+#[derive(Clone, PartialEq)]
+pub struct CellEdit {
+    pub row: usize,
+    pub col: usize,
+    pub text: String,
+    /// o texto está "selecionado": a primeira tecla o substitui, em vez de somar
+    pub fresh: bool,
+}
+
+/// O que a grade precisa saber da edição para se desenhar.
+pub struct GridEdit {
+    pub writable: bool,
+    /// a tabela tem chave primária (ou `rowid`) e dá para editar
+    pub editable: bool,
+    pub updates: HashMap<(usize, usize), Value>,
+    pub deleted: HashSet<usize>,
+    pub cell: Option<(usize, usize, String)>,
+    pub new_rows: Vec<Vec<Option<Value>>>,
 }
 
 /// Arrasto de uma tabela no diagrama.
@@ -154,6 +178,13 @@ pub struct DbPane {
     /// posições escolhidas arrastando as tabelas do diagrama, por índice de tabela
     pub moved: HashMap<usize, (f32, f32)>,
     pub drag: Option<Drag>,
+    /// modo edição ligado (a sessão aceita escrita)
+    pub writable: bool,
+    /// mudanças pendentes na página atual: células trocadas, linhas apagadas e linhas novas
+    pub updates: HashMap<(usize, usize), Value>,
+    pub deleted: HashSet<usize>,
+    pub new_rows: Vec<Vec<Option<Value>>>,
+    pub cell: Option<CellEdit>,
     pub sql: String,
     pub sql_focus: bool,
     pub result: Option<QueryResult>,
@@ -189,6 +220,11 @@ impl Default for DbPane {
             dg_y: 0.0,
             moved: HashMap::new(),
             drag: None,
+            writable: false,
+            updates: HashMap::new(),
+            deleted: HashSet::new(),
+            new_rows: Vec::new(),
+            cell: None,
             sql: "SELECT 1;".into(),
             sql_focus: false,
             result: None,
@@ -203,6 +239,19 @@ impl Default for DbPane {
 }
 
 impl DbPane {
+    /// Quantas mudanças esperam para ser aplicadas.
+    pub fn pending_count(&self) -> usize {
+        let touched_rows: HashSet<usize> = self.updates.keys().map(|(r, _)| *r).filter(|r| !self.deleted.contains(r)).collect();
+        touched_rows.len() + self.deleted.len() + self.new_rows.iter().filter(|r| r.iter().any(Option::is_some)).count()
+    }
+
+    fn clear_pending(&mut self) {
+        self.updates.clear();
+        self.deleted.clear();
+        self.new_rows.clear();
+        self.cell = None;
+    }
+
     /// Painel novo, com as conexões salvas lidas do disco.
     pub fn load() -> Self {
         let (store, err) = Store::load(&store_path());
@@ -228,6 +277,12 @@ fn col_widths(cols: &[String], rows: &[Vec<Value>]) -> Vec<f32> {
             (longest as f32 * CHAR_W + 28.0).clamp(80.0, 300.0)
         })
         .collect()
+}
+
+/// Tecla de digitação (letra, Enter, Backspace...) sem Ctrl, Alt nem Super? Com a página do banco aberta ela não vai
+/// para o terminal escondido.
+pub fn swallows_typing(key: &str, has_char: bool, ctrl: bool, alt: bool, platform: bool) -> bool {
+    !ctrl && !alt && !platform && (has_char || matches!(key, "enter" | "backspace" | "space" | "tab" | "delete"))
 }
 
 /// Tipo abreviado para caber no cartão do diagrama (`timestamp without time zone` vira `timestamp`).
@@ -331,16 +386,20 @@ impl Workspace {
     }
 
     /// Guarda um banco recém-aberto no painel e carrega a primeira tabela.
-    fn adopt_db(&mut self, db: Db, tables: Vec<Table>, active: Option<u64>, name: String, cx: &mut Context<Self>) {
+    fn adopt_db(&mut self, db: Db, tables: Vec<Table>, active: Option<u64>, name: String, read_only: bool, cx: &mut Context<Self>) {
         let (kind, label) = (db.kind(), db.label());
         let Some(p) = self.db.as_mut() else { return };
         let store = std::mem::take(&mut p.store);
-        *p = DbPane { store, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, selected: (!tables.is_empty()).then_some(0), tables, ..DbPane::default() };
+        *p = DbPane { store, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, writable: !read_only, selected: (!tables.is_empty()).then_some(0), tables, ..DbPane::default() };
         self.db_load_page(cx);
     }
 
     /// Fecha o banco aberto e volta à lista de conexões.
     pub fn db_back_to_manager(&mut self, cx: &mut Context<Self>) {
+        if self.db_blocked() {
+            cx.notify();
+            return;
+        }
         if let Some(p) = self.db.as_mut() {
             let (store, epoch) = (std::mem::take(&mut p.store), p.epoch + 1);
             *p = DbPane { store, epoch, ..DbPane::default() };
@@ -348,13 +407,13 @@ impl Workspace {
         cx.notify();
     }
 
-    fn open_sqlite(&mut self, path: PathBuf, active: Option<u64>, name: String, cx: &mut Context<Self>) {
-        let res = Database::open(&path, &Options::default()).and_then(|d| {
+    fn open_sqlite(&mut self, path: PathBuf, active: Option<u64>, name: String, read_only: bool, cx: &mut Context<Self>) {
+        let res = Database::open(&path, &Options { read_only, ..Options::default() }).and_then(|d| {
             let mut db = Db::Sqlite(d);
             db.schema().map(|t| (db, t))
         });
         match res {
-            Ok((db, tables)) => self.adopt_db(db, tables, active, name, cx),
+            Ok((db, tables)) => self.adopt_db(db, tables, active, name, read_only, cx),
             Err(e) => {
                 if let Some(p) = self.db.as_mut() {
                     p.manager.connecting = false;
@@ -369,7 +428,7 @@ impl Workspace {
     pub fn open_database(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.show_db_pane();
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("banco").to_string();
-        self.open_sqlite(path, None, name, cx);
+        self.open_sqlite(path, None, name, false, cx);
     }
 
     /// Clicou em Conectar numa conexão salva: SQLite abre direto; PostgreSQL pede a senha.
@@ -378,7 +437,7 @@ impl Workspace {
         let Some(conn) = p.store.get(id).cloned() else { return };
         p.error = None;
         match conn.kind {
-            Kind::Sqlite => self.open_sqlite(PathBuf::from(expand_home(&conn.path)), Some(id), conn.name, cx),
+            Kind::Sqlite => self.open_sqlite(PathBuf::from(expand_home(&conn.path)), Some(id), conn.name, conn.read_only, cx),
             Kind::Postgres => {
                 p.manager.asking = Some(id);
                 p.manager.password.clear();
@@ -403,11 +462,14 @@ impl Workspace {
         p.manager.connecting = true;
         p.epoch += 1;
         let epoch = p.epoch;
+        let read_only = conn.read_only;
         cx.spawn(async move |this, cx| {
             let out = cx
                 .background_executor()
                 .spawn(async move {
                     let mut db = Db::Postgres(PgDatabase::connect(&cfg)?);
+                    // a conexão abre protegida; só se permite escrever se ela não for marcada como somente leitura
+                    db.set_writable(!read_only)?;
                     let tables = db.schema()?;
                     Ok::<_, ox_db::Error>((db, tables))
                 })
@@ -415,7 +477,7 @@ impl Workspace {
             let _ = this.update(cx, |ws, cx| {
                 let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
                 match out {
-                    Ok((db, tables)) => ws.adopt_db(db, tables, Some(id), conn.name.clone(), cx),
+                    Ok((db, tables)) => ws.adopt_db(db, tables, Some(id), conn.name.clone(), read_only, cx),
                     Err(e) => {
                         p.manager.connecting = false;
                         p.error = Some(e.to_string());
@@ -484,13 +546,17 @@ impl Workspace {
         if p.active.is_some() || p.kind != "SQLite" {
             return;
         }
-        let id = p.store.upsert(SavedConn { id: 0, name: p.name.clone(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: p.label.clone(), ca_file: String::new() });
+        let id = p.store.upsert(SavedConn { id: 0, name: p.name.clone(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: p.label.clone(), ca_file: String::new(), read_only: false });
         p.active = Some(id);
         self.persist_store();
         cx.notify();
     }
 
     pub fn db_select_table(&mut self, i: usize, view: View, cx: &mut Context<Self>) {
+        if self.db_blocked() {
+            cx.notify();
+            return;
+        }
         let Some(p) = self.db.as_mut() else { return };
         if i >= p.tables.len() {
             return;
@@ -578,10 +644,58 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Cola `text` no campo que está com o teclado. Campos de uma linha só recebem a primeira linha. `false` se nenhum
+    /// campo de texto está ativo (então a tecla segue o caminho normal).
+    fn db_paste(&mut self, text: &str) -> bool {
+        let one_line = text.lines().next().unwrap_or("").trim_end_matches('\r');
+        let Some(p) = self.db.as_mut() else { return false };
+        if p.db.is_none() {
+            if let Some(f) = p.manager.edit.as_mut() {
+                if f.is_port() {
+                    f.field_mut().push_str(&one_line.chars().filter(char::is_ascii_digit).collect::<String>());
+                } else {
+                    f.field_mut().push_str(one_line);
+                }
+                return true;
+            }
+            if p.manager.asking.is_some() {
+                p.manager.password.push_str(one_line);
+                return true;
+            }
+            return false;
+        }
+        if let Some(c) = p.cell.as_mut() {
+            if std::mem::take(&mut c.fresh) {
+                c.text.clear();
+            }
+            c.text.push_str(one_line);
+        } else if p.filter_focus {
+            p.filter.push_str(one_line);
+            p.side_scroll = 0;
+        } else if p.sql_focus {
+            p.sql.push_str(&text.replace("\r\n", "\n"));
+        } else {
+            return false;
+        }
+        true
+    }
+
     /// Teclas com o painel Banco em foco.
     pub fn on_db_key(&mut self, k: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
         let key = k.key.to_lowercase();
         let (ctrl, alt) = (k.modifiers.control, k.modifiers.alt);
+        // com a página do banco aberta o terminal fica escondido: digitação solta não pode chegar nele (um Enter
+        // rodaria um comando às cegas). Atalhos com Ctrl, Alt ou Super continuam passando.
+        let typing = swallows_typing(&key, k.key_char.is_some(), ctrl, alt, k.modifiers.platform);
+        // Ctrl+V cola no campo que está com o teclado (query, célula, senha, formulário, filtro)
+        if ctrl && !alt && key == "v" {
+            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                if self.db_paste(&text) {
+                    cx.notify();
+                    return true;
+                }
+            }
+        }
         let Some(p) = self.db.as_mut() else { return false };
 
         if p.db.is_none() {
@@ -643,9 +757,48 @@ impl Workspace {
                 cx.notify();
                 return true;
             }
-            return false;
+            return typing;
         }
 
+        if p.cell.is_some() {
+            match key.as_str() {
+                "enter" | "tab" => {
+                    self.db_commit_cell(None);
+                }
+                "escape" => p.cell = None,
+                "backspace" => {
+                    if let Some(c) = p.cell.as_mut() {
+                        if std::mem::take(&mut c.fresh) {
+                            c.text.clear();
+                        } else {
+                            c.text.pop();
+                        }
+                    }
+                }
+                _ if !ctrl && !alt => match (&k.key_char, key.as_str()) {
+                    (Some(t), _) => {
+                        if let Some(c) = p.cell.as_mut() {
+                            if std::mem::take(&mut c.fresh) {
+                                c.text.clear();
+                            }
+                            c.text.push_str(t);
+                        }
+                    }
+                    (None, "space") => {
+                        if let Some(c) = p.cell.as_mut() {
+                            if std::mem::take(&mut c.fresh) {
+                                c.text.clear();
+                            }
+                            c.text.push(' ');
+                        }
+                    }
+                    _ => return false,
+                },
+                _ => return false,
+            }
+            cx.notify();
+            return true;
+        }
         if p.filter_focus {
             match key.as_str() {
                 "escape" | "enter" => p.filter_focus = false,
@@ -690,20 +843,202 @@ impl Workspace {
         let pages = p.total.map_or(usize::MAX, |t| t as usize);
         match key.as_str() {
             "pagedown" if p.view == View::Data && p.offset + PAGE_SIZE < pages => {
-                p.offset += PAGE_SIZE;
-                self.db_load_page(cx);
+                if !self.db_blocked() {
+                    if let Some(p) = self.db.as_mut() {
+                        p.offset += PAGE_SIZE;
+                    }
+                    self.db_load_page(cx);
+                }
             }
             "pageup" if p.view == View::Data && p.offset > 0 => {
-                p.offset = p.offset.saturating_sub(PAGE_SIZE);
-                self.db_load_page(cx);
+                if !self.db_blocked() {
+                    if let Some(p) = self.db.as_mut() {
+                        p.offset = p.offset.saturating_sub(PAGE_SIZE);
+                    }
+                    self.db_load_page(cx);
+                }
             }
             "down" => p.vscroll += 1,
             "up" => p.vscroll = p.vscroll.saturating_sub(1),
             "escape" => self.show_db = false,
-            _ => return false,
+            _ => return typing,
         }
         cx.notify();
         true
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Edição na grade
+
+impl Workspace {
+    /// Há mudanças pendentes (ou uma célula aberta)? Então não se troca de tabela, página ou banco: primeiro se
+    /// aplica ou se descarta. Devolve `true` se a ação deve ser cancelada.
+    pub fn db_blocked(&mut self) -> bool {
+        let Some(p) = self.db.as_mut() else { return false };
+        if p.pending_count() > 0 || p.cell.is_some() {
+            p.error = Some("Há mudanças pendentes: aplique ou descarte antes de continuar.".into());
+            return true;
+        }
+        false
+    }
+
+    /// A tabela aberta na grade aceita edição?
+    fn db_table_editable(&self) -> bool {
+        let Some(p) = self.db.as_ref() else { return false };
+        p.selected.and_then(|i| p.tables.get(i)).is_some_and(|t| !t.is_view && t.key() != KeyKind::None)
+    }
+
+    /// Abre a célula para digitar (dois cliques). `row` além das linhas da página é uma linha nova.
+    pub fn db_begin_cell(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        if !self.db_table_editable() {
+            return;
+        }
+        let Some(p) = self.db.as_mut() else { return };
+        if !p.writable || p.deleted.contains(&row) {
+            return;
+        }
+        let n_real = p.page.as_ref().map_or(0, |pg| pg.rows.len());
+        let current = if row < n_real {
+            p.updates.get(&(row, col)).cloned().or_else(|| p.page.as_ref().and_then(|pg| pg.rows.get(row)).and_then(|r| r.get(col)).cloned())
+        } else {
+            p.new_rows.get(row - n_real).and_then(|r| r.get(col)).cloned().flatten()
+        };
+        let text = match current {
+            Some(Value::Blob { .. }) => return, // binário não se edita aqui
+            Some(Value::Null) | None => String::new(),
+            Some(v) => v.display(),
+        };
+        p.sql_focus = false;
+        p.filter_focus = false;
+        p.cell = Some(CellEdit { row, col, text, fresh: true });
+        cx.notify();
+    }
+
+    /// Fecha a célula guardando o que foi digitado como mudança pendente (ou desfazendo, se voltou ao original).
+    fn db_commit_cell(&mut self, value: Option<Value>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let Some(c) = p.cell.take() else { return };
+        let n_real = p.page.as_ref().map_or(0, |pg| pg.rows.len());
+        if c.row < n_real {
+            let original = p.page.as_ref().and_then(|pg| pg.rows.get(c.row)).and_then(|r| r.get(c.col)).cloned();
+            let new = value.unwrap_or(Value::Text(c.text));
+            // texto igual ao que já estava (ou nulo no lugar de nulo): não há mudança
+            let same = match (&original, &new) {
+                (Some(Value::Null), Value::Null) => true,
+                (Some(o), Value::Text(t)) => !matches!(o, Value::Null) && o.display() == *t,
+                _ => false,
+            };
+            if same {
+                p.updates.remove(&(c.row, c.col));
+            } else {
+                p.updates.insert((c.row, c.col), new);
+            }
+        } else if let Some(slot) = p.new_rows.get_mut(c.row - n_real).and_then(|r| r.get_mut(c.col)) {
+            *slot = match value {
+                Some(v) => Some(v),
+                // vazio numa linha nova é "usar o padrão do banco"
+                None if c.text.is_empty() => None,
+                None => Some(Value::Text(c.text)),
+            };
+        }
+    }
+
+    /// Define a célula aberta como NULL.
+    pub fn db_cell_null(&mut self, cx: &mut Context<Self>) {
+        self.db_commit_cell(Some(Value::Null));
+        cx.notify();
+    }
+
+    pub fn db_new_row(&mut self, cx: &mut Context<Self>) {
+        if !self.db_table_editable() {
+            return;
+        }
+        if let Some(p) = self.db.as_mut() {
+            if p.writable {
+                let n = p.page.as_ref().map_or(0, |pg| pg.columns.len());
+                p.new_rows.push(vec![None; n]);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Marca a linha para apagar (ou desmarca); numa linha nova, tira a linha.
+    pub fn db_toggle_delete(&mut self, row: usize, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        if !p.writable {
+            return;
+        }
+        let n_real = p.page.as_ref().map_or(0, |pg| pg.rows.len());
+        if row >= n_real {
+            if row - n_real < p.new_rows.len() {
+                p.new_rows.remove(row - n_real);
+            }
+        } else if !p.deleted.remove(&row) {
+            p.deleted.insert(row);
+        }
+        p.cell = None;
+        cx.notify();
+    }
+
+    pub fn db_discard(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = self.db.as_mut() {
+            p.clear_pending();
+            p.error = None;
+        }
+        cx.notify();
+    }
+
+    /// Aplica as mudanças pendentes numa transação, em segundo plano. Falhou: nada muda e tudo continua pendente.
+    pub fn db_apply(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let (Some(db), Some(t), Some(page)) = (p.db.clone(), p.selected.and_then(|i| p.tables.get(i)).cloned(), p.page.clone()) else { return };
+        if p.pending_count() == 0 || p.running {
+            return;
+        }
+        let mut changes: Vec<Change> = Vec::new();
+        let mut cells: Vec<(&(usize, usize), &Value)> = p.updates.iter().filter(|((r, _), _)| !p.deleted.contains(r)).collect();
+        cells.sort_by_key(|(k, _)| **k);
+        for ((row, col), value) in cells {
+            let (Some(key), Some(column)) = (page.keys.get(*row), page.columns.get(*col)) else { continue };
+            changes.push(Change::Update { key: key.clone(), column: column.clone(), value: value.clone() });
+        }
+        let mut deleted: Vec<usize> = p.deleted.iter().copied().collect();
+        deleted.sort_unstable();
+        for row in deleted {
+            if let Some(key) = page.keys.get(row) {
+                changes.push(Change::Delete { key: key.clone() });
+            }
+        }
+        for row in &p.new_rows {
+            let values: Vec<(String, Value)> = row.iter().enumerate().filter_map(|(i, v)| v.clone().map(|v| (page.columns[i].clone(), v))).collect();
+            if !values.is_empty() {
+                changes.push(Change::Insert { values });
+            }
+        }
+        p.running = true;
+        p.error = None;
+        p.epoch += 1;
+        let epoch = p.epoch;
+        cx.spawn(async move |this, cx| {
+            let out = cx.background_executor().spawn(async move { db.lock().unwrap().apply(&t, &changes) }).await;
+            let _ = this.update(cx, |ws, cx| {
+                let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
+                p.running = false;
+                match out {
+                    Ok(()) => {
+                        p.clear_pending();
+                        p.total = None;
+                        ws.db_load_page(cx);
+                    }
+                    // falhou: o banco ficou como estava, e as mudanças continuam pendentes para corrigir
+                    Err(e) => p.error = Some(format!("Nada foi gravado: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 }
 
@@ -723,77 +1058,156 @@ impl Workspace {
         }
     }
 
-    /// Grade de resultados: cabeçalho fixo, linhas com rolagem vertical e horizontal. `sortable`: clicar no cabeçalho ordena.
-    fn db_grid(&self, id: &'static str, cols: &[String], rows: &[Vec<Value>], types: &[String], view: (f32, f32), sortable: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// Grade de resultados: cabeçalho fixo, linhas com rolagem vertical e horizontal. `sortable`: clicar no cabeçalho
+    /// ordena. `edit`: na aba Dados com o modo edição, dois cliques abrem a célula e há um "×" por linha.
+    fn db_grid(&self, id: &'static str, cols: &[String], rows: &[Vec<Value>], types: &[String], view: (f32, f32), sortable: bool, edit: Option<&GridEdit>, cx: &mut Context<Self>) -> AnyElement {
         let p = self.db.as_ref().expect("painel aberto");
         let mono = self.mono.clone();
         let accent = self.focus_color();
         let widths = col_widths(cols, rows);
-        let total_w: f32 = widths.iter().sum();
+        let gutter = if edit.is_some_and(|e| e.writable && e.editable) { 30.0 } else { 0.0 };
+        let total_w: f32 = widths.iter().sum::<f32>() + gutter;
+        let n_real = rows.len();
+        let n_new = edit.map_or(0, |e| e.new_rows.len());
+        let total = n_real + n_new;
         let visible = ((view.1 - HEAD_H) / ROW_H).floor().max(1.0) as usize;
-        let max_scroll = rows.len().saturating_sub(visible);
+        let max_scroll = total.saturating_sub(visible);
         let first = p.vscroll.min(max_scroll);
         let hscroll = p.hscroll.clamp(0.0, (total_w - view.0).max(0.0));
         let sort = p.sort.clone();
 
-        let header = div().flex_none().h(px(HEAD_H)).flex().items_center().ml(px(-hscroll)).bg(rgb(c_panel())).border_b_1().border_color(rgb(c_card_border())).children(cols.iter().enumerate().map(|(i, c)| {
-            let (arrow, active) = match &sort {
-                Some((s, true)) if sortable && s == c => (" ↑", true),
-                Some((s, false)) if sortable && s == c => (" ↓", true),
-                _ => ("", false),
-            };
-            let name = c.clone();
-            let ty = types.get(i).cloned().unwrap_or_default();
-            div()
-                .id((id, i))
-                .flex_none()
-                .w(px(widths[i]))
-                .h_full()
-                .px(px(12.))
-                .flex()
-                .flex_col()
-                .justify_center()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .when(i > 0, |d| d.border_l_1().border_color(rgb(c_divider())))
-                .when(sortable, |d| {
-                    d.cursor_pointer().hover(|s| s.bg(rgb(c_hover()))).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(p) = this.db.as_mut() {
-                            p.sort = match p.sort.take() {
-                                Some((s, true)) if s == name => Some((s, false)),
-                                Some((s, false)) if s == name => None,
-                                _ => Some((name.clone(), true)),
-                            };
-                            p.offset = 0;
-                        }
-                        this.db_load_page(cx);
-                    }))
-                })
-                .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(if active { accent } else { c_text() })).child(format!("{c}{arrow}")))
-                .when(!ty.is_empty(), |d| d.child(div().font_family(mono.clone()).text_size(px(10.)).text_color(rgb(c_muted())).child(ty)))
-        }));
+        let header = div()
+            .flex_none()
+            .h(px(HEAD_H))
+            .flex()
+            .items_center()
+            .ml(px(-hscroll))
+            .bg(rgb(c_panel()))
+            .border_b_1()
+            .border_color(rgb(c_card_border()))
+            .when(gutter > 0.0, |d| d.child(div().flex_none().w(px(gutter)).h_full()))
+            .children(cols.iter().enumerate().map(|(i, c)| {
+                let (arrow, active) = match &sort {
+                    Some((s, true)) if sortable && s == c => (" ↑", true),
+                    Some((s, false)) if sortable && s == c => (" ↓", true),
+                    _ => ("", false),
+                };
+                let name = c.clone();
+                let ty = types.get(i).cloned().unwrap_or_default();
+                div()
+                    .id((id, i))
+                    .flex_none()
+                    .w(px(widths[i]))
+                    .h_full()
+                    .px(px(12.))
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .when(i > 0 || gutter > 0.0, |d| d.border_l_1().border_color(rgb(c_divider())))
+                    .when(sortable, |d| {
+                        d.cursor_pointer().hover(|s| s.bg(rgb(c_hover()))).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            if this.db_blocked() {
+                                cx.notify();
+                                return;
+                            }
+                            if let Some(p) = this.db.as_mut() {
+                                p.sort = match p.sort.take() {
+                                    Some((s, true)) if s == name => Some((s, false)),
+                                    Some((s, false)) if s == name => None,
+                                    _ => Some((name.clone(), true)),
+                                };
+                                p.offset = 0;
+                            }
+                            this.db_load_page(cx);
+                        }))
+                    })
+                    .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(rgb(if active { accent } else { c_text() })).child(format!("{c}{arrow}")))
+                    .when(!ty.is_empty(), |d| d.child(div().font_family(mono.clone()).text_size(px(10.)).text_color(rgb(c_muted())).child(ty)))
+            }));
 
-        let body = (first..(first + visible).min(rows.len())).map(|ri| {
-            div()
-                .flex_none()
-                .h(px(ROW_H))
-                .flex()
-                .items_center()
-                .ml(px(-hscroll))
-                .when(ri % 2 == 1, |d| d.bg(rgb(c_code_bg())))
-                .children(rows[ri].iter().enumerate().map(|(i, v)| {
-                    let muted = matches!(v, Value::Null | Value::Blob { .. });
+        let ncols = cols.len();
+        // linhas novas no topo, onde se vê; depois as da página
+        let order: Vec<usize> = (n_real..total).chain(0..n_real).collect();
+        let body = order[first..(first + visible).min(total)].iter().copied().map(|ri| {
+            let is_new = ri >= n_real;
+            let deleted = edit.is_some_and(|e| e.deleted.contains(&ri));
+            let can_edit = edit.is_some_and(|e| e.writable && e.editable) && !deleted;
+            let bg = if deleted {
+                Some(with_alpha(RED, 0x24))
+            } else if is_new {
+                Some(with_alpha(0x8fd7ae, 0x1c))
+            } else if ri % 2 == 1 {
+                Some(rgb(c_code_bg()).into())
+            } else {
+                None
+            };
+            let mut row = div().flex_none().h(px(ROW_H)).flex().items_center().ml(px(-hscroll)).when_some(bg, |d, c| d.bg(c));
+            if gutter > 0.0 {
+                row = row.child(
                     div()
+                        .id(("db-rowdel", ri))
                         .flex_none()
-                        .w(px(widths.get(i).copied().unwrap_or(80.0)))
-                        .px(px(12.))
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_size(px(12.))
-                        .font_family(mono.clone())
-                        .text_color(rgb(if muted { c_muted() } else { c_text() }))
-                        .child(v.display().replace('\n', "↵"))
-                }))
+                        .w(px(gutter))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .text_size(px(13.))
+                        .text_color(rgb(if deleted { accent } else { c_muted() }))
+                        .hover(|s| s.bg(rgb(c_hover())).text_color(rgb(if deleted { accent } else { RED })))
+                        .child(if deleted { "↺" } else { "×" })
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.db_toggle_delete(ri, cx))),
+                );
+            }
+            for ci in 0..ncols {
+                // o que mostrar: o valor da página, a mudança pendente ou, numa linha nova, o que foi digitado
+                let (text, muted, changed) = match edit {
+                    Some(e) if is_new => match e.new_rows.get(ri - n_real).and_then(|r| r.get(ci)).cloned().flatten() {
+                        Some(v) => (v.display(), matches!(v, Value::Null), true),
+                        None => ("(padrão)".to_string(), true, false),
+                    },
+                    Some(e) if e.updates.contains_key(&(ri, ci)) && !deleted => {
+                        let v = &e.updates[&(ri, ci)];
+                        (v.display(), matches!(v, Value::Null), true)
+                    }
+                    _ => {
+                        let v = rows.get(ri).and_then(|r| r.get(ci));
+                        (v.map_or(String::new(), Value::display), matches!(v, Some(Value::Null | Value::Blob { .. })) || deleted, false)
+                    }
+                };
+                let editing = edit.and_then(|e| e.cell.as_ref()).filter(|(r, c, _)| *r == ri && *c == ci).map(|(_, _, t)| t.clone());
+                let mut cell = div()
+                    .id(("db-cell", ri * 512 + ci))
+                    .flex_none()
+                    .w(px(widths.get(ci).copied().unwrap_or(80.0)))
+                    .h_full()
+                    .px(px(12.))
+                    .flex()
+                    .items_center()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_size(px(12.))
+                    .font_family(mono.clone())
+                    .text_color(rgb(if muted { c_muted() } else { c_text() }))
+                    .when(changed && editing.is_none(), |d| d.bg(with_alpha(accent, 0x30)));
+                cell = match editing {
+                    Some(t) => cell.border_1().border_color(rgb(accent)).bg(rgb(c_bg())).child(format!("{t}▏")),
+                    None => cell.child(text.replace('\n', "↵")),
+                };
+                if can_edit {
+                    cell = cell.cursor_text().on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                        this.focused_pane = Some(PaneKind::Db);
+                        if ev.click_count() >= 2 {
+                            this.db_begin_cell(ri, ci, cx);
+                        }
+                    }));
+                }
+                row = row.child(cell);
+            }
+            row
         });
 
         div()
@@ -852,7 +1266,7 @@ impl Workspace {
         let error = p.error.clone();
         let conns: Vec<SavedConn> = p.store.conns.clone();
         let scroll = p.dg_y.clamp(0.0, 4000.0);
-        let edit = p.manager.edit.as_ref().map(|f| (f.id, f.kind, f.focus, f.name.clone(), f.host.clone(), f.port.clone(), f.user.clone(), f.dbname.clone(), f.path.clone(), f.ca.clone()));
+        let edit = p.manager.edit.as_ref().map(|f| (f.id, f.kind, f.focus, f.name.clone(), f.host.clone(), f.port.clone(), f.user.clone(), f.dbname.clone(), f.path.clone(), f.ca.clone(), f.read_only));
         let width = (r.w - 64.0).clamp(240.0, 1100.0);
 
         // um campo de texto do formulário; clicar nele dá o foco do teclado
@@ -913,7 +1327,7 @@ impl Workspace {
         }
 
         // formulário de nova conexão ou edição
-        if let Some((id, kind, focus, name, host, port, user, dbname, path, ca)) = edit {
+        if let Some((id, kind, focus, name, host, port, user, dbname, path, ca, read_only)) = edit {
             let seg = |sid: &'static str, label: &'static str, k: Kind, cx: &mut Context<Self>| {
                 let on = kind == k;
                 div()
@@ -953,6 +1367,23 @@ impl Workspace {
             }
             form = form.child(
                 div()
+                    .id("db-ro")
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .child(div().flex_none().size(px(14.)).flex().items_center().justify_center().rounded(px(3.)).border_1().border_color(rgb(if read_only { accent } else { c_muted() })).bg(rgb(if read_only { accent } else { c_bg() })).text_size(px(10.)).text_color(rgb(c_bg())).child(if read_only { "✓" } else { "" }))
+                    .child(div().text_size(px(12.)).text_color(rgb(c_text())).child("Somente leitura"))
+                    .child(div().text_size(px(11.)).text_color(rgb(c_muted())).child("— protege contra mudanças sem querer; desmarcado, dá para editar e rodar INSERT, UPDATE e DELETE"))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        if let Some(f) = this.db.as_mut().and_then(|p| p.manager.edit.as_mut()) {
+                            f.read_only = !f.read_only;
+                        }
+                        cx.notify();
+                    })),
+            );
+            form = form.child(
+                div()
                     .flex()
                     .gap_2()
                     .child(self.db_btn("db-save", "Salvar", true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_save_form(cx))))
@@ -988,13 +1419,13 @@ impl Workspace {
                 .text_color(rgb(c_muted()))
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(cell(None).child("Nome"))
-                .child(cell(Some(110.0)).child("Tipo"))
+                .child(cell(Some(150.0)).child("Tipo"))
                 .child(cell(None).child("Endereço"))
                 .child(cell(Some(262.0)).child("")),
         );
         for (n, c) in conns.iter().enumerate() {
             let id = c.id;
-            let kind_label = if c.kind == Kind::Postgres { "PostgreSQL" } else { "SQLite" };
+            let kind_label = format!("{}{}", if c.kind == Kind::Postgres { "PostgreSQL" } else { "SQLite" }, if c.read_only { " · só leitura" } else { "" });
             let go_label = if c.kind == Kind::Sqlite { "Abrir" } else { "Conectar" };
             table = table.child(
                 div()
@@ -1006,7 +1437,7 @@ impl Workspace {
                     .border_color(rgb(c_divider()))
                     .when(n % 2 == 1, |d| d.bg(rgb(c_code_bg())))
                     .child(cell(None).font_weight(FontWeight::MEDIUM).text_color(rgb(c_text())).child(c.name.clone()))
-                    .child(cell(Some(110.0)).text_color(rgb(c_muted())).child(kind_label))
+                    .child(cell(Some(150.0)).text_color(rgb(c_muted())).child(kind_label))
                     .child(cell(None).font_family(mono.clone()).text_color(rgb(c_muted())).child(c.address()))
                     .child(
                         cell(Some(262.0))
@@ -1151,6 +1582,9 @@ impl Workspace {
         let n_views = p.tables.len() - n_tables;
         let n_rel: usize = p.tables.iter().filter(|t| !t.is_view).map(|t| t.foreign_keys.len()).sum();
         let result_rows = p.result.as_ref().map(|x| x.rows.len());
+        let (writable, pending, editing_cell, applying) = (p.writable, p.pending_count(), p.cell.is_some(), p.running);
+        let editable = self.db_table_editable();
+        let show_edit_bar = view == View::Data && writable && editable && (pending > 0 || editing_cell);
 
         // barra de cima
         let mut bar = div()
@@ -1166,7 +1600,7 @@ impl Workspace {
             .child(wicon("database", 16., accent))
             .child(div().flex_none().text_size(px(13.)).font_weight(FontWeight::BOLD).text_color(rgb(c_text())).child(name))
             .child(div().flex_1().min_w_0().truncate().font_family(mono.clone()).text_size(px(11.)).text_color(rgb(c_muted())).child(label))
-            .child(div().flex_none().h(px(20.)).px(px(8.)).flex().items_center().rounded_full().bg(rgb(c_surface())).border_1().border_color(rgb(c_card_border())).text_size(px(10.)).text_color(rgb(c_muted())).child(format!("{kind_label} · só leitura")));
+            .child(div().flex_none().h(px(20.)).px(px(8.)).flex().items_center().rounded_full().bg(rgb(c_surface())).border_1().border_color(rgb(c_card_border())).text_size(px(10.)).text_color(rgb(c_muted())).child(if writable { kind_label.to_string() } else { format!("{kind_label} · só leitura") }));
         if can_save {
             bar = bar.child(self.db_btn("db-save-conn", "Salvar conexão", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_save_current(cx))));
         }
@@ -1288,7 +1722,7 @@ impl Workspace {
         }
 
         // conteúdo e rodapé de cada aba
-        let area = (main_w, content_h);
+        let area = (main_w, content_h - if show_edit_bar { EDIT_BAR_H } else { 0.0 });
         let mut footer_left = String::new();
         let mut footer_nav: Option<(bool, bool)> = None;
         let content: AnyElement = match view {
@@ -1307,7 +1741,11 @@ impl Workspace {
                             None => format!("{from}–{to}"),
                         };
                         footer_nav = Some((offset > 0, pg.truncated));
-                        self.db_grid("db-data", &pg.columns, &pg.rows, &types, area, true, cx)
+                        let edit = {
+                            let p = self.db.as_ref().unwrap();
+                            GridEdit { writable: p.writable, editable: self.db_table_editable(), updates: p.updates.clone(), deleted: p.deleted.clone(), cell: p.cell.as_ref().map(|c| (c.row, c.col, c.text.clone())), new_rows: p.new_rows.clone() }
+                        };
+                        self.db_grid("db-data", &pg.columns, &pg.rows, &types, area, true, Some(&edit), cx)
                     }
                     None => div().flex_1().p_3().text_size(px(12.)).text_color(rgb(if error.is_some() { RED } else { c_muted() })).child(error.clone().unwrap_or_else(|| if selected.is_some() { "Carregando…".into() } else { "O banco não tem tabelas.".into() })).into_any_element(),
                 }
@@ -1333,7 +1771,7 @@ impl Workspace {
                             })
                             .collect();
                         footer_left = if t.indexes.is_empty() { "Sem índices".to_string() } else { format!("Índices: {}", t.indexes.join(", ")) };
-                        self.db_grid("db-struct", &cols, &rows, &[], area, false, cx)
+                        self.db_grid("db-struct", &cols, &rows, &[], area, false, None, cx)
                     }
                     None => div().flex_1().p_3().text_size(px(12.)).text_color(rgb(c_muted())).child("Escolha uma tabela.").into_any_element(),
                 }
@@ -1347,7 +1785,7 @@ impl Workspace {
                 match res {
                     Some(res) if !res.columns.is_empty() => {
                         footer_left = format!("{} linhas em {} ms{}", res.rows.len(), res.elapsed.as_millis(), if res.truncated { format!(" (cortado em {DEFAULT_LIMIT})") } else { String::new() });
-                        self.db_grid("db-result", &res.columns, &res.rows, &[], area, false, cx)
+                        self.db_grid("db-result", &res.columns, &res.rows, &[], area, false, None, cx)
                     }
                     Some(res) => {
                         footer_left = format!("{} ms", res.elapsed.as_millis());
@@ -1370,6 +1808,10 @@ impl Workspace {
                 .child(wicon(glyph, 13., if on { c_text() } else { c_disabled() }))
                 .when(on, |d| {
                     d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if this.db_blocked() {
+                            cx.notify();
+                            return;
+                        }
                         if let Some(p) = this.db.as_mut() {
                             p.offset = (p.offset as i64 + delta * PAGE_SIZE as i64).max(0) as usize;
                         }
@@ -1382,6 +1824,24 @@ impl Workspace {
             footer = footer.child(nav("db-prev", "arrow-left", prev, -1, cx)).child(nav("db-next", "arrow-right", next, 1, cx));
         }
         footer = footer.child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(rgb(c_muted())).child(footer_left));
+        if view == View::Data && writable && editable {
+            footer = footer.child(self.db_btn("db-newrow", "+ Linha", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_new_row(cx))));
+        }
+
+        // barra das mudanças pendentes: só aparece quando há algo para aplicar ou uma célula aberta
+        let edit_bar = show_edit_bar.then(|| {
+            let mut b = div().flex_none().h(px(EDIT_BAR_H)).px(px(10.)).flex().items_center().gap_2().bg(with_alpha(accent, 0x14)).border_b_1().border_color(rgb(c_card_border()));
+            b = b.child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(rgb(c_text())).child(if pending > 0 { format!("{pending} mudança(s) pendente(s)") } else { "Enter confirma · Esc cancela".to_string() }));
+            if editing_cell {
+                b = b.child(self.db_btn("db-null", "NULL", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_cell_null(cx))));
+            }
+            if pending > 0 {
+                b = b
+                    .child(self.db_btn("db-discard", "Descartar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_discard(cx))))
+                    .child(self.db_btn("db-apply", if applying { "Aplicando…" } else { "Aplicar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_apply(cx))));
+            }
+            b
+        });
 
         // divisória e consulta embaixo
         let split = div().flex_none().h(px(SPLIT_H)).flex().items_center().justify_center().gap(px(3.)).bg(rgb(c_bg())).border_t_1().border_color(rgb(c_card_border())).children((0..3).map(|_| div().size(px(3.)).rounded_full().bg(rgb(c_disabled()))));
@@ -1403,7 +1863,7 @@ impl Workspace {
                 }),
             )
             .child(bar)
-            .child(div().flex_1().min_h_0().flex().child(sidebar).child(div().flex_1().min_w_0().flex().flex_col().child(tabs).child(content).child(footer).child(split).child(dock)))
+            .child(div().flex_1().min_h_0().flex().child(sidebar).child(div().flex_1().min_w_0().flex().flex_col().child(tabs).children(edit_bar).child(content).child(footer).child(split).child(dock)))
             .into_any_element()
     }
 
@@ -1483,7 +1943,7 @@ impl Workspace {
                     .gap_2()
                     .border_b_1()
                     .border_color(rgb(c_card_border()))
-                    .child(div().flex_none().h(px(24.)).px(px(10.)).flex().items_center().rounded(px(5.)).bg(rgb(c_surface())).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(rgb(accent)).child("Consulta"))
+                    .child(div().flex_none().h(px(24.)).px(px(10.)).flex().items_center().rounded(px(5.)).bg(rgb(c_surface())).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(rgb(accent)).child("Query"))
                     .child(div().flex_1())
                     .children(wide.then(|| div().flex_none().text_size(px(11.)).text_color(rgb(c_muted())).child(format!("Limite {DEFAULT_LIMIT} linhas"))))
                     .child(self.db_btn("db-run", if running { "Executando…" } else if wide { "Executar  Ctrl+Enter" } else { "Executar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_sql(cx)))),
@@ -1667,6 +2127,30 @@ mod tests {
         assert_eq!(expand_home("/tmp/x.db"), "/tmp/x.db");
         assert!(expand_home("~/x.db").ends_with("/x.db") && !expand_home("~/x.db").starts_with('~'));
         assert_eq!(expand_home("a~/b"), "a~/b");
+    }
+
+    #[test]
+    fn long_text_edits_keep_working_with_pasted_multiline_sql() {
+        // o texto da query guarda as quebras de linha; o destaque trata linha por linha
+        let sql = "SELECT 1;\nSELECT 2;\n-- fim";
+        assert_eq!(sql.split('\n').count(), 3);
+        assert_eq!(highlight("-- fim"), vec![("-- fim".to_string(), Tok::Comment)]);
+    }
+
+    #[test]
+    fn plain_typing_never_reaches_the_hidden_terminal_but_shortcuts_do() {
+        assert!(swallows_typing("a", true, false, false, false));
+        assert!(swallows_typing("enter", false, false, false, false));
+        assert!(swallows_typing("backspace", false, false, false, false));
+        assert!(swallows_typing("space", false, false, false, false));
+        // atalhos com Ctrl, Alt ou Super passam (trocar de aba, abrir configurações...)
+        assert!(!swallows_typing("t", true, true, false, false));
+        assert!(!swallows_typing("k", true, true, false, false));
+        assert!(!swallows_typing("1", true, false, true, false));
+        assert!(!swallows_typing("a", true, false, false, true));
+        // teclas de função e setas não são digitação
+        assert!(!swallows_typing("f5", false, false, false, false));
+        assert!(!swallows_typing("left", false, false, false, false));
     }
 
     #[test]

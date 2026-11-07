@@ -34,6 +34,9 @@ pub struct SavedConn {
     /// arquivo PEM com a CA do servidor PostgreSQL remoto, quando o certificado é próprio (opcional)
     #[serde(default)]
     pub ca_file: String,
+    /// abrir só para leitura (proteção contra acidente; o padrão é poder editar, como num cliente de banco comum)
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 impl SavedConn {
@@ -126,7 +129,7 @@ mod tests {
     use super::*;
 
     fn pg(name: &str) -> SavedConn {
-        SavedConn { id: 0, name: name.into(), kind: Kind::Postgres, host: "localhost".into(), port: 5432, user: "ana".into(), dbname: name.into(), path: String::new(), ca_file: String::new() }
+        SavedConn { id: 0, name: name.into(), kind: Kind::Postgres, host: "localhost".into(), port: 5432, user: "ana".into(), dbname: name.into(), path: String::new(), ca_file: String::new(), read_only: false }
     }
 
     #[test]
@@ -151,7 +154,7 @@ mod tests {
         let path = d.path().join("cfg").join("databases.json");
         let mut s = Store::default();
         s.upsert(pg("loja"));
-        s.upsert(SavedConn { id: 0, name: "vendas".into(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: "/x/v.sqlite".into(), ca_file: String::new() });
+        s.upsert(SavedConn { id: 0, name: "vendas".into(), kind: Kind::Sqlite, host: String::new(), port: 0, user: String::new(), dbname: String::new(), path: "/x/v.sqlite".into(), ca_file: String::new(), read_only: true });
         s.save(&path).unwrap();
         let (back, err) = Store::load(&path);
         assert_eq!((back, err), (s, None));
@@ -181,6 +184,20 @@ mod tests {
         assert!(s.conns.is_empty() && err.is_some_and(|e| e.contains("inválido")));
         // o arquivo ruim continua lá, para a pessoa poder consertar
         assert!(bad.exists());
+    }
+
+    #[test]
+    fn read_only_defaults_to_off_and_is_remembered() {
+        let d = tempfile::tempdir().unwrap();
+        let path = d.path().join("databases.json");
+        // arquivo antigo, sem o campo: abre editável
+        std::fs::write(&path, r#"{"connections":[{"id":1,"name":"x","kind":"sqlite","path":"/a.db"}]}"#).unwrap();
+        let (s, _) = Store::load(&path);
+        assert!(!s.conns[0].read_only);
+        let mut s = s;
+        s.upsert(SavedConn { read_only: true, ..s.conns[0].clone() });
+        s.save(&path).unwrap();
+        assert!(Store::load(&path).0.conns[0].read_only);
     }
 
     #[test]

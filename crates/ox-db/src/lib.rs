@@ -198,8 +198,9 @@ impl Table {
     }
 }
 
-/// Há outra instrução depois do primeiro `;`? Respeita textos entre aspas, nomes entre aspas ou colchetes e
-/// comentários, e ignora `;` repetidos e espaços no fim. (O `rusqlite` descarta o resto em silêncio.)
+/// Há outra instrução depois do primeiro `;`? Respeita textos entre aspas, nomes entre aspas ou colchetes, texto entre
+/// `$$ ... $$` (ou `$tag$ ... $tag$`) e comentários, e ignora `;` repetidos e espaços no fim. Só serve para decidir se
+/// um texto é uma instrução só (e pode ir por cursor); scripts com várias instruções rodam inteiros.
 pub(crate) fn has_trailing_statement(sql: &str) -> bool {
     let b = sql.as_bytes();
     let (mut i, mut ended) = (0, false);
@@ -213,6 +214,27 @@ pub(crate) fn has_trailing_statement(sql: &str) -> bool {
                 i += 1;
                 while i < b.len() && b[i] != close {
                     i += 1;
+                }
+            }
+            b'$' => {
+                // `$tag$` abre um texto que só fecha com o mesmo `$tag$`
+                let mut j = i + 1;
+                while j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+                    j += 1;
+                }
+                if b.get(j) == Some(&b'$') {
+                    if ended {
+                        return true;
+                    }
+                    let tag = &b[i..=j];
+                    let mut k = j + 1;
+                    while k + tag.len() <= b.len() && &b[k..k + tag.len()] != tag {
+                        k += 1;
+                    }
+                    i = (k + tag.len()).min(b.len());
+                    continue;
+                } else if ended {
+                    return true;
                 }
             }
             b'-' if b.get(i + 1) == Some(&b'-') => {
@@ -282,10 +304,21 @@ impl Default for Options {
     }
 }
 
+/// Uma mudança pedida na grade. Todas as pendentes vão juntas, numa transação: ou entram todas ou nenhuma.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// troca o valor de uma coluna da linha identificada por `key` (os valores da chave, na ordem de [`Table::key`])
+    Update { key: Vec<Value>, column: String, value: Value },
+    Delete { key: Vec<Value> },
+    /// só as colunas preenchidas; as outras ficam com o padrão do banco
+    Insert { values: Vec<(String, Value)> },
+}
+
 pub struct Database {
     conn: Connection,
     path: PathBuf,
     read_only: bool,
+    busy: Duration,
 }
 
 impl Database {
@@ -299,7 +332,7 @@ impl Database {
         conn.busy_timeout(opts.busy).map_err(map_err)?;
         // lê o cabeçalho agora: se não for SQLite, falha aqui e não na primeira consulta
         conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).map_err(map_err)?;
-        Ok(Database { conn, path: path.to_path_buf(), read_only: opts.read_only })
+        Ok(Database { conn, path: path.to_path_buf(), read_only: opts.read_only, busy: opts.busy })
     }
 
     pub fn path(&self) -> &Path {
@@ -374,27 +407,31 @@ impl Database {
         })
     }
 
+    /// Roda um texto SQL com uma ou várias instruções (um script, com triggers incluídos). Devolve o resultado da
+    /// última instrução que devolve linhas; se nenhuma devolve, o total de linhas afetadas.
     fn run(&self, sql: &str, limit: usize) -> Result<QueryResult, Error> {
-        if has_trailing_statement(sql) {
-            return Err(Error::MultipleStatements);
-        }
-        let mut st = self.conn.prepare(sql).map_err(map_err)?;
-        let cols = st.column_count();
-        if cols == 0 {
-            let changes = st.execute([]).map_err(map_err)?;
-            return Ok(QueryResult { columns: Vec::new(), rows: Vec::new(), truncated: false, elapsed: Duration::ZERO, changes: Some(changes) });
-        }
-        let columns: Vec<String> = st.column_names().into_iter().map(str::to_string).collect();
-        let mut rows = st.query([]).map_err(map_err)?;
-        let (mut out, mut truncated) = (Vec::new(), false);
-        while let Some(r) = rows.next().map_err(map_err)? {
-            if out.len() >= limit {
-                truncated = true;
-                break;
+        let mut batch = rusqlite::Batch::new(&self.conn, sql);
+        let (mut last, mut changes, mut any) = (None::<QueryResult>, 0usize, false);
+        while let Some(mut st) = batch.next().map_err(map_err)? {
+            any = true;
+            let cols = st.column_count();
+            if cols == 0 {
+                changes += st.execute([]).map_err(map_err)?;
+                continue;
             }
-            out.push((0..cols).map(|i| r.get_ref(i).map(read_value)).collect::<Result<Vec<_>, _>>().map_err(map_err)?);
+            let columns: Vec<String> = st.column_names().into_iter().map(str::to_string).collect();
+            let mut rows = st.query([]).map_err(map_err)?;
+            let (mut out, mut truncated) = (Vec::new(), false);
+            while let Some(r) = rows.next().map_err(map_err)? {
+                if out.len() >= limit {
+                    truncated = true;
+                    break;
+                }
+                out.push((0..cols).map(|i| r.get_ref(i).map(read_value)).collect::<Result<Vec<_>, _>>().map_err(map_err)?);
+            }
+            last = Some(QueryResult { columns, rows: out, truncated, elapsed: Duration::ZERO, changes: None });
         }
-        Ok(QueryResult { columns, rows: out, truncated, elapsed: Duration::ZERO, changes: None })
+        Ok(last.unwrap_or(QueryResult { columns: Vec::new(), rows: Vec::new(), truncated: false, elapsed: Duration::ZERO, changes: Some(if any { changes } else { 0 }) }))
     }
 
     /// Uma página de uma tabela ou visão, na ordem de `sort` (coluna, crescente), com a chave de cada linha.
@@ -424,6 +461,58 @@ impl Database {
             rows.push(data);
         }
         Ok(Page { columns: t.columns.iter().map(|c| c.name.clone()).collect(), rows, keys, truncated: res.truncated })
+    }
+
+    /// Passa a abrir para escrita (ou volta a só leitura) reabrindo o arquivo.
+    pub fn set_read_only(&mut self, read_only: bool) -> Result<(), Error> {
+        if read_only == self.read_only {
+            return Ok(());
+        }
+        let reopened = Database::open(&self.path, &Options { read_only, busy: self.busy })?;
+        *self = reopened;
+        Ok(())
+    }
+
+    /// Aplica todas as mudanças numa transação; qualquer falha desfaz tudo.
+    pub fn apply(&self, table: &str, changes: &[Change]) -> Result<(), Error> {
+        let t = self.writable(table)?;
+        let tx = self.conn.unchecked_transaction().map_err(map_err)?;
+        for ch in changes {
+            match ch {
+                Change::Update { key, column, value } => {
+                    Self::check_column(&t, column)?;
+                    let sql = format!("UPDATE {} SET {} = ? WHERE {}", quote(&t.name), quote(column), Self::where_key(&t, key)?);
+                    let mut params: Vec<&dyn ToSql> = vec![value];
+                    params.extend(key.iter().map(|k| k as &dyn ToSql));
+                    let n = tx.execute(&sql, params.as_slice()).map_err(map_err)?;
+                    if n != 1 {
+                        return Err(Error::NotOneRow(n));
+                    }
+                }
+                Change::Delete { key } => {
+                    let sql = format!("DELETE FROM {} WHERE {}", quote(&t.name), Self::where_key(&t, key)?);
+                    let params: Vec<&dyn ToSql> = key.iter().map(|k| k as &dyn ToSql).collect();
+                    let n = tx.execute(&sql, params.as_slice()).map_err(map_err)?;
+                    if n != 1 {
+                        return Err(Error::NotOneRow(n));
+                    }
+                }
+                Change::Insert { values } => {
+                    for (c, _) in values {
+                        Self::check_column(&t, c)?;
+                    }
+                    let sql = if values.is_empty() {
+                        format!("INSERT INTO {} DEFAULT VALUES", quote(&t.name))
+                    } else {
+                        let cols: Vec<String> = values.iter().map(|(c, _)| quote(c)).collect();
+                        format!("INSERT INTO {} ({}) VALUES ({})", quote(&t.name), cols.join(", "), vec!["?"; values.len()].join(", "))
+                    };
+                    let params: Vec<&dyn ToSql> = values.iter().map(|(_, v)| v as &dyn ToSql).collect();
+                    tx.execute(&sql, params.as_slice()).map_err(map_err)?;
+                }
+            }
+        }
+        tx.commit().map_err(map_err)
     }
 
     // ---- edição ----
@@ -529,7 +618,23 @@ impl Db {
     pub fn is_read_only(&self) -> bool {
         match self {
             Db::Sqlite(d) => d.is_read_only(),
-            Db::Postgres(_) => true,
+            Db::Postgres(d) => !d.is_writable(),
+        }
+    }
+
+    /// Liga ou desliga a escrita. Em PostgreSQL muda o padrão da sessão; em SQLite reabre o arquivo.
+    pub fn set_writable(&mut self, on: bool) -> Result<(), Error> {
+        match self {
+            Db::Sqlite(d) => d.set_read_only(!on),
+            Db::Postgres(d) => d.set_writable(on),
+        }
+    }
+
+    /// Aplica as mudanças pendentes de uma tabela numa transação só.
+    pub fn apply(&mut self, t: &Table, changes: &[Change]) -> Result<(), Error> {
+        match self {
+            Db::Sqlite(d) => d.apply(&t.name, changes),
+            Db::Postgres(d) => d.apply(t, changes),
         }
     }
 
@@ -618,6 +723,61 @@ mod tests {
     }
 
     #[test]
+    fn changes_are_applied_together_or_not_at_all() {
+        let (_d, p) = sample();
+        let db = rw(&p);
+        let ok = vec![
+            Change::Update { key: vec![Value::Integer(1)], column: "nome".into(), value: Value::Text("Ana Maria".into()) },
+            Change::Insert { values: vec![("nome".into(), Value::Text("Dani".into()))] },
+            Change::Delete { key: vec![Value::Integer(2)] },
+        ];
+        db.apply("pessoas", &ok).unwrap();
+        let names: Vec<_> = db.query("SELECT nome FROM pessoas ORDER BY id", 10, T).unwrap().rows.into_iter().map(|r| r[0].display()).collect();
+        assert_eq!(names, ["Ana Maria", "Caio", "Dani"]);
+        // a terceira mudança falha (linha que não existe): as duas primeiras não podem ficar
+        let bad = vec![
+            Change::Update { key: vec![Value::Integer(1)], column: "nome".into(), value: Value::Text("MUDOU".into()) },
+            Change::Insert { values: vec![("nome".into(), Value::Text("Fantasma".into()))] },
+            Change::Delete { key: vec![Value::Integer(999)] },
+        ];
+        assert_eq!(db.apply("pessoas", &bad).unwrap_err(), Error::NotOneRow(0));
+        let after: Vec<_> = db.query("SELECT nome FROM pessoas ORDER BY id", 10, T).unwrap().rows.into_iter().map(|r| r[0].display()).collect();
+        assert_eq!(after, names);
+        // coluna que não existe e violação de NOT NULL também desfazem tudo
+        let unknown = vec![Change::Update { key: vec![Value::Integer(1)], column: "fantasma".into(), value: Value::Null }];
+        assert!(matches!(db.apply("pessoas", &unknown), Err(Error::UnknownColumn { .. })));
+        let not_null = vec![Change::Insert { values: vec![("nome".into(), Value::Text("Eva".into()))] }, Change::Insert { values: vec![("idade".into(), Value::Integer(5))] }];
+        assert!(matches!(db.apply("pessoas", &not_null), Err(Error::Sql(_))));
+        assert_eq!(db.count_rows("pessoas").unwrap(), 3);
+    }
+
+    #[test]
+    fn writing_must_be_turned_on_and_can_be_turned_off_again() {
+        let (_d, p) = sample();
+        let mut db = ro(&p);
+        let ch = vec![Change::Delete { key: vec![Value::Integer(1)] }];
+        assert_eq!(db.apply("pessoas", &ch).unwrap_err(), Error::ReadOnly);
+        db.set_read_only(false).unwrap();
+        assert!(!db.is_read_only());
+        db.apply("pessoas", &ch).unwrap();
+        db.set_read_only(true).unwrap();
+        assert_eq!(db.apply("pessoas", &[Change::Delete { key: vec![Value::Integer(2)] }]).unwrap_err(), Error::ReadOnly);
+        assert_eq!(db.count_rows("pessoas").unwrap(), 2);
+        assert_eq!(db.query("DELETE FROM pessoas", 10, T).unwrap_err(), Error::ReadOnly);
+    }
+
+    #[test]
+    fn tables_without_a_key_are_edited_by_rowid_through_apply() {
+        let (_d, p) = sample();
+        let db = rw(&p);
+        let page = db.page("solta", None, 0, 10).unwrap();
+        db.apply("solta", &[Change::Update { key: page.keys[1].clone(), column: "x".into(), value: Value::Text("B!".into()) }]).unwrap();
+        let x: Vec<_> = db.query("SELECT x FROM solta ORDER BY rowid", 10, T).unwrap().rows.into_iter().map(|r| r[0].display()).collect();
+        assert_eq!(x, ["a", "B!", "a"]);
+        assert_eq!(db.apply("adultos", &[Change::Delete { key: vec![] }]).unwrap_err(), Error::NotEditable("adultos".into()));
+    }
+
+    #[test]
     fn foreign_keys_are_read_including_composite_ones() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fk.db");
@@ -686,14 +846,47 @@ mod tests {
     }
 
     #[test]
-    fn only_one_statement_and_errors_are_readable() {
+    fn scripts_run_whole_and_errors_are_readable() {
         let (_d, p) = sample();
-        let db = ro(&p);
-        assert_eq!(db.query("SELECT 1; SELECT 2", 10, T).unwrap_err(), Error::MultipleStatements);
+        let db = rw(&p);
+        // vários comandos: roda todos e devolve o resultado da última consulta
+        let r = db.query("INSERT INTO solta VALUES ('x'); INSERT INTO solta VALUES ('y'); SELECT count(*) FROM solta", 10, T).unwrap();
+        assert_eq!(r.rows[0][0], Value::Integer(5));
+        // sem nenhuma consulta no meio: o total de linhas afetadas
+        let r = db.query("UPDATE solta SET x = 'z' WHERE x = 'x'; DELETE FROM solta WHERE x = 'y'", 10, T).unwrap();
+        assert_eq!(r.changes, Some(2));
         match db.query("SELECT * FROM nao_existe", 10, T) {
             Err(Error::Sql(m)) => assert!(m.contains("nao_existe"), "{m}"),
             other => panic!("{other:?}"),
         }
+        // um comando do meio que falha interrompe o script
+        assert!(db.query("INSERT INTO solta VALUES ('ok'); SELECT * FROM nao_existe; INSERT INTO solta VALUES ('nunca')", 10, T).is_err());
+        assert_eq!(db.query("SELECT count(*) FROM solta WHERE x = 'nunca'", 1, T).unwrap().rows[0][0], Value::Integer(0));
+    }
+
+    #[test]
+    fn triggers_can_be_created_and_they_fire() {
+        let (_d, p) = sample();
+        let db = rw(&p);
+        db.query("CREATE TABLE auditoria (msg TEXT)", 10, T).unwrap();
+        // o corpo do trigger tem `;` dentro de BEGIN ... END
+        db.query("CREATE TRIGGER tr_nome AFTER INSERT ON pessoas BEGIN INSERT INTO auditoria VALUES ('novo: ' || NEW.nome); UPDATE pessoas SET idade = 99 WHERE id = NEW.id; END", 10, T).unwrap();
+        db.query("INSERT INTO pessoas (nome, idade) VALUES ('Dani', 20)", 10, T).unwrap();
+        assert_eq!(db.query("SELECT msg FROM auditoria", 10, T).unwrap().rows[0][0], Value::Text("novo: Dani".into()));
+        assert_eq!(db.query("SELECT idade FROM pessoas WHERE nome = 'Dani'", 10, T).unwrap().rows[0][0], Value::Integer(99));
+        // criar o trigger e usar numa execução só
+        let r = db.query("CREATE TABLE log2 (n INT); CREATE TRIGGER t2 AFTER INSERT ON log2 BEGIN INSERT INTO auditoria VALUES ('log2'); END; INSERT INTO log2 VALUES (1); SELECT count(*) FROM auditoria", 10, T).unwrap();
+        assert_eq!(r.rows[0][0], Value::Integer(2));
+    }
+
+    #[test]
+    fn dollar_quoted_bodies_do_not_count_as_extra_statements() {
+        assert!(!has_trailing_statement("CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql"));
+        assert!(!has_trailing_statement("DO $corpo$ BEGIN PERFORM 1; PERFORM 2; END $corpo$"));
+        assert!(!has_trailing_statement("SELECT '$$ ; $$'"));
+        assert!(has_trailing_statement("CREATE FUNCTION f() RETURNS int AS $$ SELECT 1; $$ LANGUAGE sql; SELECT f()"));
+        assert!(has_trailing_statement("SELECT $1; SELECT 2"));
+        assert!(!has_trailing_statement("SELECT $1"));
     }
 
     #[test]

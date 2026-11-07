@@ -13,7 +13,7 @@ use postgres::error::SqlState;
 use postgres::config::SslMode;
 use postgres::{Client, Config, NoTls, SimpleQueryMessage};
 
-use crate::{has_trailing_statement, quote, Column, Error, ForeignKey, Page, QueryResult, Table, Value};
+use crate::{has_trailing_statement, quote, Change, Column, Error, ForeignKey, KeyKind, Page, QueryResult, Table, Value};
 
 /// Tempo máximo para conectar.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -105,6 +105,65 @@ pub struct PgDatabase {
     client: Client,
     cfg: PgConfig,
     timeout_ms: u64,
+    writable: bool,
+}
+
+fn check_column(t: &Table, column: &str) -> Result<(), Error> {
+    t.columns.iter().any(|c| c.name == column).then_some(()).ok_or_else(|| Error::UnknownColumn { table: t.name.clone(), column: column.to_string() })
+}
+
+/// Valor como literal SQL. Só vale com `standard_conforming_strings=on` e UTF-8 (conferidos ao conectar): então a
+/// única coisa a escapar é a aspa simples. Texto com o caractere nulo não existe em PostgreSQL e é recusado.
+pub(crate) fn literal(v: &Value) -> Result<String, Error> {
+    match v {
+        Value::Null => Ok("NULL".into()),
+        Value::Integer(i) => Ok(i.to_string()),
+        Value::Real(r) if r.is_finite() => Ok(format!("'{r}'")),
+        Value::Real(_) => Err(Error::Sql("número não finito".into())),
+        Value::Text(s) if s.contains('\0') => Err(Error::Sql("o texto tem o caractere nulo, que o PostgreSQL não aceita".into())),
+        Value::Text(s) => Ok(format!("'{}'", s.replace('\'', "''"))),
+        Value::Blob { .. } => Err(Error::Sql("valor binário não é editável".into())),
+    }
+}
+
+/// `WHERE` pela chave primária: `"a" = 'x' AND "b" = 'y'`.
+fn where_key(t: &Table, key: &[Value]) -> Result<String, Error> {
+    let KeyKind::PrimaryKey(cols) = t.key() else { return Err(Error::NotEditable(t.name.clone())) };
+    if cols.len() != key.len() || key.iter().any(|k| matches!(k, Value::Null)) {
+        return Err(Error::Sql(format!("a chave de {} tem {} valor(es) e nenhum pode ser nulo", t.name, cols.len())));
+    }
+    cols.iter().zip(key).map(|(c, v)| Ok(format!("{} = {}", quote(c), literal(v)?))).collect::<Result<Vec<_>, Error>>().map(|v| v.join(" AND "))
+}
+
+/// Resultado do último conjunto de linhas de uma resposta com várias instruções (e o total de linhas afetadas pelas
+/// instruções que não devolvem linhas).
+fn collect_last(msgs: Vec<SimpleQueryMessage>) -> (Vec<String>, Vec<Vec<Value>>, u64) {
+    let (mut cols, mut rows, mut affected, mut in_set) = (Vec::new(), Vec::new(), 0u64, false);
+    for m in msgs {
+        match m {
+            SimpleQueryMessage::RowDescription(d) => {
+                cols = d.iter().map(|c| c.name().to_string()).collect();
+                rows.clear();
+                in_set = true;
+            }
+            SimpleQueryMessage::Row(r) => {
+                if !in_set {
+                    cols = r.columns().iter().map(|c| c.name().to_string()).collect();
+                    rows.clear();
+                    in_set = true;
+                }
+                rows.push((0..r.len()).map(|i| text(r.get(i))).collect());
+            }
+            SimpleQueryMessage::CommandComplete(n) => {
+                if !in_set {
+                    affected += n;
+                }
+                in_set = false;
+            }
+            _ => {}
+        }
+    }
+    (cols, rows, affected)
 }
 
 fn text(v: Option<&str>) -> Value {
@@ -135,7 +194,8 @@ impl PgDatabase {
         let timeout_ms = 10_000;
         let mut c = Config::new();
         c.host(&cfg.host).port(cfg.port).user(&cfg.user).dbname(&cfg.dbname).connect_timeout(CONNECT_TIMEOUT).application_name("brasa");
-        c.options(&format!("-c default_transaction_read_only=on -c statement_timeout={timeout_ms}"));
+        // texto entre aspas sem barra invertida especial e em UTF-8: é o que torna seguro o escape dos valores
+        c.options(&format!("-c default_transaction_read_only=on -c statement_timeout={timeout_ms} -c standard_conforming_strings=on -c client_encoding=UTF8"));
         if let Some(p) = &cfg.password {
             c.password(p);
         }
@@ -156,7 +216,13 @@ impl PgDatabase {
                 tls_hint(&e).unwrap_or_else(|| map_pg(e))
             }
         })?;
-        Ok(PgDatabase { client, cfg: PgConfig { password: None, ..cfg.clone() }, timeout_ms })
+        let mut db = PgDatabase { client, cfg: PgConfig { password: None, ..cfg.clone() }, timeout_ms, writable: false };
+        // confere que o servidor aceitou: sem isso o escape de valores não é seguro
+        let (_, rows, _) = collect(db.simple("SHOW standard_conforming_strings")?);
+        if rows.first().and_then(|r| r.first()) != Some(&Value::Text("on".into())) {
+            return Err(Error::Connect("o servidor não aceitou standard_conforming_strings=on".into()));
+        }
+        Ok(db)
     }
 
     /// `usuario@servidor:porta/banco`, sem senha.
@@ -194,7 +260,7 @@ impl PgDatabase {
         for m in tables {
             if let SimpleQueryMessage::Row(r) = m {
                 let (schema, name) = key(r.get(0), r.get(1));
-                by_table.insert((schema.clone(), name.clone()), Table { schema: Some(schema), name, is_view: r.get(2) == Some("VIEW"), columns: Vec::new(), indexes: Vec::new(), without_rowid: false, foreign_keys: Vec::new() });
+                by_table.insert((schema.clone(), name.clone()), Table { schema: Some(schema), name, is_view: r.get(2) == Some("VIEW"), columns: Vec::new(), indexes: Vec::new(), without_rowid: true, foreign_keys: Vec::new() });
             }
         }
         for m in cols {
@@ -261,6 +327,7 @@ impl PgDatabase {
     }
 
     /// Uma página da tabela. `t` precisa vir de [`PgDatabase::schema`]: o nome só vale se existia no esquema.
+    /// Cada linha vem com os valores da chave primária (vazio se a tabela não tem: então não se edita).
     pub fn page(&mut self, t: &Table, sort: Option<(&str, bool)>, offset: usize, limit: usize) -> Result<Page, Error> {
         let order = match sort {
             Some((col, asc)) => {
@@ -269,41 +336,134 @@ impl PgDatabase {
             }
             None => String::new(),
         };
+        let key_cols: Vec<String> = match t.key() {
+            KeyKind::PrimaryKey(c) => c.iter().map(|c| quote(c)).collect(),
+            _ => Vec::new(),
+        };
         let all: Vec<String> = t.columns.iter().map(|c| quote(&c.name)).collect();
-        let sql = format!("SELECT {} FROM {}{order} LIMIT {} OFFSET {}", all.join(", "), Self::qualified(t), limit + 1, offset);
+        let select: Vec<String> = key_cols.iter().cloned().chain(all).collect();
+        let sql = format!("SELECT {} FROM {}{order} LIMIT {} OFFSET {}", select.join(", "), Self::qualified(t), limit + 1, offset);
         let (_, mut rows, _) = collect(self.simple(&sql)?);
         let truncated = rows.len() > limit;
         rows.truncate(limit);
-        let keys = vec![Vec::new(); rows.len()];
-        Ok(Page { columns: t.columns.iter().map(|c| c.name.clone()).collect(), rows, keys, truncated })
+        let n = key_cols.len();
+        let (mut keys, mut data) = (Vec::new(), Vec::new());
+        for mut r in rows {
+            let rest = r.split_off(n);
+            keys.push(r);
+            data.push(rest);
+        }
+        Ok(Page { columns: t.columns.iter().map(|c| c.name.clone()).collect(), rows: data, keys, truncated })
     }
 
-    /// Roda SQL. Consulta de leitura (`SELECT`, `WITH`, `VALUES`, `TABLE`) vai por cursor e traz no máximo `limit`
-    /// linhas; o resto (comandos, `SHOW`, `EXPLAIN`) roda direto e é cortado em `limit`.
+    pub fn is_writable(&self) -> bool {
+        self.writable
+    }
+
+    /// Liga ou desliga a escrita desta sessão (o padrão de transação do servidor).
+    pub fn set_writable(&mut self, on: bool) -> Result<(), Error> {
+        self.client.batch_execute(if on { "SET default_transaction_read_only = off" } else { "SET default_transaction_read_only = on" }).map_err(map_pg)?;
+        self.writable = on;
+        Ok(())
+    }
+
+    /// Aplica as mudanças numa transação (`BEGIN READ WRITE`): qualquer falha desfaz tudo.
+    pub fn apply(&mut self, t: &Table, changes: &[Change]) -> Result<(), Error> {
+        if !self.writable {
+            return Err(Error::ReadOnly);
+        }
+        if t.is_view {
+            return Err(Error::NotEditable(t.name.clone()));
+        }
+        if self.in_user_tx()? {
+            return Err(Error::Sql("há uma transação aberta na Query: faça COMMIT ou ROLLBACK antes de aplicar as mudanças".into()));
+        }
+        // monta todo o SQL antes de abrir a transação: erro de validação não deixa nada pela metade
+        let mut stmts: Vec<(String, bool)> = Vec::new(); // (SQL, deve atingir exatamente uma linha)
+        let table = Self::qualified(t);
+        for ch in changes {
+            match ch {
+                Change::Update { key, column, value } => {
+                    check_column(t, column)?;
+                    stmts.push((format!("UPDATE {table} SET {} = {} WHERE {}", quote(column), literal(value)?, where_key(t, key)?), true));
+                }
+                Change::Delete { key } => stmts.push((format!("DELETE FROM {table} WHERE {}", where_key(t, key)?), true)),
+                Change::Insert { values } => {
+                    for (c, _) in values {
+                        check_column(t, c)?;
+                    }
+                    let sql = if values.is_empty() {
+                        format!("INSERT INTO {table} DEFAULT VALUES")
+                    } else {
+                        let cols: Vec<String> = values.iter().map(|(c, _)| quote(c)).collect();
+                        let vals: Result<Vec<String>, Error> = values.iter().map(|(_, v)| literal(v)).collect();
+                        format!("INSERT INTO {table} ({}) VALUES ({})", cols.join(", "), vals?.join(", "))
+                    };
+                    stmts.push((sql, false));
+                }
+            }
+        }
+        self.client.batch_execute("BEGIN READ WRITE").map_err(map_pg)?;
+        for (sql, one) in &stmts {
+            let res = self.client.simple_query(sql).map_err(map_pg).and_then(|msgs| {
+                let n = msgs.iter().find_map(|m| if let SimpleQueryMessage::CommandComplete(n) = m { Some(*n) } else { None }).unwrap_or(0);
+                if *one && n != 1 {
+                    Err(Error::NotOneRow(n as usize))
+                } else {
+                    Ok(())
+                }
+            });
+            if let Err(e) = res {
+                let _ = self.client.batch_execute("ROLLBACK");
+                return Err(e);
+            }
+        }
+        self.client.batch_execute("COMMIT").map_err(|e| {
+            let _ = self.client.batch_execute("ROLLBACK");
+            map_pg(e)
+        })
+    }
+
+    /// Há uma transação aberta pelo usuário (um `BEGIN` sem `COMMIT` ainda)? Dentro de uma transação o relógio dela
+    /// (`now()`) fica para trás do relógio da instrução (`statement_timestamp()`); fora, são iguais.
+    fn in_user_tx(&mut self) -> Result<bool, Error> {
+        let (_, rows, _) = collect(self.simple("SELECT now() = statement_timestamp()")?);
+        Ok(rows.first().and_then(|r| r.first()) == Some(&Value::Text("f".into())))
+    }
+
+    /// Roda SQL: uma instrução ou um script inteiro (funções com `$$`, triggers, vários comandos). Uma só consulta de
+    /// leitura (`SELECT`, `WITH`, `VALUES`, `TABLE`) vai por cursor e traz no máximo `limit` linhas; o resto roda direto
+    /// e o resultado é o do último conjunto de linhas, cortado em `limit`. O que o usuário abrir com `BEGIN` continua
+    /// aberto entre uma execução e outra, e as consultas de leitura não o desfazem.
     pub fn query(&mut self, sql: &str, limit: usize, timeout: Duration) -> Result<QueryResult, Error> {
         let started = Instant::now();
-        if has_trailing_statement(sql) {
-            return Err(Error::MultipleStatements);
-        }
         self.set_timeout(timeout)?;
         let first = sql.trim_start().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("").to_lowercase();
         let sql = sql.trim().trim_end_matches(';');
-        let result = if matches!(first.as_str(), "select" | "with" | "values" | "table") {
-            self.client.batch_execute("BEGIN").map_err(map_pg)?;
+        let result = if matches!(first.as_str(), "select" | "with" | "values" | "table") && !has_trailing_statement(sql) {
+            let in_tx = self.in_user_tx()?;
+            if !in_tx {
+                self.client.batch_execute("BEGIN").map_err(map_pg)?;
+            }
             let run = (|| {
                 self.client.batch_execute(&format!("DECLARE brasa_cursor NO SCROLL CURSOR FOR {sql}")).map_err(map_pg)?;
                 self.simple(&format!("FETCH {} FROM brasa_cursor", limit + 1))
             })();
-            let _ = self.client.batch_execute("ROLLBACK");
+            if in_tx {
+                // na transação do usuário: só fecha o cursor, sem mexer nela
+                let _ = self.client.batch_execute("CLOSE brasa_cursor");
+            } else {
+                let _ = self.client.batch_execute("ROLLBACK");
+            }
             let (columns, mut rows, _) = collect(run?);
             let truncated = rows.len() > limit;
             rows.truncate(limit);
             QueryResult { columns, rows, truncated, elapsed: Duration::ZERO, changes: None }
         } else {
-            let (columns, mut rows, done) = collect(self.simple(sql)?);
+            let (columns, mut rows, affected) = collect_last(self.simple(sql)?);
             let truncated = rows.len() > limit;
             rows.truncate(limit);
-            let changes = columns.is_empty().then_some(done.unwrap_or(0) as usize);
+            let changes = columns.is_empty().then_some(affected as usize);
             QueryResult { columns, rows, truncated, elapsed: Duration::ZERO, changes }
         };
         Ok(QueryResult { elapsed: started.elapsed(), ..result })
@@ -342,6 +502,14 @@ mod tests {
 #[cfg(test)]
 mod live {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Os testes compartilham as mesmas tabelas: um de cada vez.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial() -> MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn cfg() -> Option<PgConfig> {
         let target = std::env::var("BRASA_TEST_PG").ok()?;
@@ -354,6 +522,7 @@ mod live {
     #[test]
     fn schema_has_tables_views_keys_and_other_schemas() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         let s = db.schema().unwrap();
         let labels: Vec<_> = s.iter().map(Table::label).collect();
@@ -379,6 +548,7 @@ mod live {
     #[test]
     fn pages_are_sorted_counted_and_cut() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         let t = db.schema().unwrap().into_iter().find(|t| t.name == "pessoas").unwrap();
         assert_eq!(db.count_rows(&t).unwrap(), 251);
@@ -395,6 +565,7 @@ mod live {
     #[test]
     fn queries_return_text_limit_rows_and_report_columns_even_when_empty() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         let r = db.query("SELECT id, nome, nota FROM pessoas ORDER BY id;", 5, T).unwrap();
         assert_eq!(r.columns, ["id", "nome", "nota"]);
@@ -408,9 +579,192 @@ mod live {
         assert_eq!(db.query("WITH x AS (SELECT 1 AS a) SELECT a FROM x", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
     }
 
+    // ---- edição ----
+
+    fn writable() -> Option<PgDatabase> {
+        let cfg = cfg()?;
+        let mut db = PgDatabase::connect(&cfg).unwrap();
+        db.set_writable(true).unwrap();
+        Some(db)
+    }
+
+    fn table(db: &mut PgDatabase, name: &str) -> Table {
+        db.schema().unwrap().into_iter().find(|t| t.name == name).unwrap()
+    }
+
+    fn rotulo(db: &mut PgDatabase, b: &str) -> Value {
+        db.query(&format!("SELECT rotulo FROM tags WHERE a = 'x' AND b = '{b}'"), 1, T).unwrap().rows[0][0].clone()
+    }
+
+    fn key(a: &str, b: &str) -> Vec<Value> {
+        vec![Value::Text(a.into()), Value::Text(b.into())]
+    }
+
+    #[test]
+    fn edits_need_write_mode_and_do_not_leak_to_other_sessions() {
+        let Some(cfg) = cfg() else { return };
+        let _g = serial();
+        let mut db = PgDatabase::connect(&cfg).unwrap();
+        let t = table(&mut db, "tags");
+        let ch = [Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text("NAO".into()) }];
+        assert_eq!(db.apply(&t, &ch).unwrap_err(), Error::ReadOnly);
+        db.set_writable(true).unwrap();
+        assert!(db.is_writable());
+        db.apply(&t, &[Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text("um".into()) }]).unwrap();
+        // outra sessão continua só leitura
+        let mut other = PgDatabase::connect(&cfg).unwrap();
+        assert_eq!(other.query("DELETE FROM tags", 1, T).unwrap_err(), Error::ReadOnly);
+        // voltando a só leitura
+        db.set_writable(false).unwrap();
+        assert_eq!(db.apply(&t, &ch).unwrap_err(), Error::ReadOnly);
+        assert_eq!(db.query("DELETE FROM tags", 1, T).unwrap_err(), Error::ReadOnly);
+    }
+
+    #[test]
+    fn values_with_quotes_backslashes_unicode_and_sql_are_stored_literally() {
+        let _g = serial();
+        let Some(mut db) = writable() else { return };
+        let t = table(&mut db, "tags");
+        let nasty = ["x'); DROP TABLE tags; --", "\\'; DROP TABLE tags; --", "'", "\\", "linha1\nlinha2", "ação — 日本語 🔥", "", "NULL", "  espaços  "];
+        for v in nasty {
+            db.apply(&t, &[Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text(v.into()) }]).unwrap();
+            assert_eq!(rotulo(&mut db, "y"), Value::Text(v.into()), "valor {v:?}");
+        }
+        // texto "NULL" é texto; nulo de verdade é nulo
+        db.apply(&t, &[Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Null }]).unwrap();
+        assert_eq!(rotulo(&mut db, "y"), Value::Null);
+        // a tabela continua lá
+        assert_eq!(db.query("SELECT count(*) FROM tags", 1, T).unwrap().rows[0][0], Value::Text("2".into()));
+        // chave com texto malicioso não acha linha nenhuma (e não executa nada)
+        let r = db.apply(&t, &[Change::Delete { key: key("x'; DROP TABLE tags; --", "y") }]);
+        assert_eq!(r.unwrap_err(), Error::NotOneRow(0));
+        // o caractere nulo não existe em PostgreSQL: recusado antes de abrir transação
+        let r = db.apply(&t, &[Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text("a\0b".into()) }]);
+        assert!(matches!(r, Err(Error::Sql(m)) if m.contains("nulo")));
+        db.apply(&t, &[Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text("um".into()) }]).unwrap();
+    }
+
+    #[test]
+    fn a_failing_change_undoes_the_whole_batch() {
+        let _g = serial();
+        let Some(mut db) = writable() else { return };
+        let t = table(&mut db, "tags");
+        let r = db.apply(
+            &t,
+            &[
+                Change::Update { key: key("x", "y"), column: "rotulo".into(), value: Value::Text("MUDOU".into()) },
+                Change::Insert { values: vec![("a".into(), Value::Text("n".into())), ("b".into(), Value::Text("n".into()))] },
+                Change::Delete { key: key("x", "nao-existe") },
+            ],
+        );
+        assert_eq!(r.unwrap_err(), Error::NotOneRow(0));
+        assert_eq!(rotulo(&mut db, "y"), Value::Text("um".into()));
+        assert_eq!(db.query("SELECT count(*) FROM tags", 1, T).unwrap().rows[0][0], Value::Text("2".into()));
+        // valor que o tipo da coluna não aceita também desfaz tudo, e a sessão segue utilizável
+        let p = table(&mut db, "pessoas");
+        let r = db.apply(&p, &[Change::Update { key: vec![Value::Text("1".into())], column: "idade".into(), value: Value::Text("abc".into()) }]);
+        assert!(matches!(r, Err(Error::Sql(m)) if m.contains("integer")));
+        assert_eq!(db.query("SELECT idade FROM pessoas WHERE id = 1", 1, T).unwrap().rows[0][0], Value::Text("19".into()));
+    }
+
+    #[test]
+    fn rows_are_inserted_with_defaults_edited_by_key_and_deleted() {
+        let _g = serial();
+        let Some(mut db) = writable() else { return };
+        let p = table(&mut db, "pessoas");
+        let before: i64 = db.count_rows(&p).unwrap();
+        db.apply(&p, &[Change::Insert { values: vec![("nome".into(), Value::Text("Novo de teste".into())), ("idade".into(), Value::Text("33".into()))] }]).unwrap();
+        assert_eq!(db.count_rows(&p).unwrap(), before + 1);
+        // a linha nova (id serial, ativo padrão true) é editada e apagada pela chave primária que a página devolve
+        let pg = db.page(&p, Some(("id", false)), 0, 5).unwrap();
+        assert_eq!(pg.rows[0][1], Value::Text("Novo de teste".into()));
+        assert_eq!(pg.rows[0][4], Value::Text("t".into()));
+        let k = pg.keys[0].clone();
+        assert_eq!(k.len(), 1);
+        db.apply(&p, &[Change::Update { key: k.clone(), column: "nome".into(), value: Value::Text("Editado".into()) }, Change::Update { key: k.clone(), column: "nota".into(), value: Value::Text("9.5".into()) }]).unwrap();
+        let r = db.query(&format!("SELECT nome, nota FROM pessoas WHERE id = {}", k[0].display()), 1, T).unwrap();
+        assert_eq!(r.rows[0], vec![Value::Text("Editado".into()), Value::Text("9.50".into())]);
+        db.apply(&p, &[Change::Delete { key: k }]).unwrap();
+        assert_eq!(db.count_rows(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn composite_keys_work_and_tables_without_a_key_or_views_are_not_editable() {
+        let _g = serial();
+        let Some(mut db) = writable() else { return };
+        let t = table(&mut db, "tags");
+        let pg = db.page(&t, None, 0, 10).unwrap();
+        assert_eq!(pg.keys[0].len(), 2);
+        let solta = table(&mut db, "solta");
+        assert_eq!(db.page(&solta, None, 0, 10).unwrap().keys[0], Vec::<Value>::new());
+        let r = db.apply(&solta, &[Change::Delete { key: vec![Value::Text("a".into())] }]);
+        assert_eq!(r.unwrap_err(), Error::NotEditable("solta".into()));
+        let v = table(&mut db, "adultos");
+        assert_eq!(db.apply(&v, &[Change::Insert { values: vec![] }]).unwrap_err(), Error::NotEditable("adultos".into()));
+        // chave com a quantidade errada de valores
+        let r = db.apply(&t, &[Change::Delete { key: vec![Value::Text("x".into())] }]);
+        assert!(matches!(r, Err(Error::Sql(m)) if m.contains("chave")));
+        assert!(matches!(db.apply(&t, &[Change::Update { key: key("x", "y"), column: "fantasma".into(), value: Value::Null }]), Err(Error::UnknownColumn { .. })));
+    }
+
+    #[test]
+    fn functions_with_dollar_quotes_and_triggers_can_be_created_and_fire() {
+        let Some(mut db) = writable() else { return };
+        let _g = serial();
+        let _ = db.query("DROP TABLE IF EXISTS probe_t", 10, T);
+        let _ = db.query("DROP FUNCTION IF EXISTS probe_f()", 10, T);
+        db.query("CREATE TABLE probe_t (id int PRIMARY KEY, v text)", 10, T).unwrap();
+        // função com `;` dentro do $$ ... $$ e depois o trigger que a usa, tudo numa execução só
+        db.query(
+            "CREATE FUNCTION probe_f() RETURNS trigger AS $$ BEGIN NEW.v := upper(NEW.v); RETURN NEW; END; $$ LANGUAGE plpgsql; \
+             CREATE TRIGGER t_up BEFORE INSERT ON probe_t FOR EACH ROW EXECUTE FUNCTION probe_f()",
+            10,
+            T,
+        )
+        .unwrap();
+        db.query("INSERT INTO probe_t VALUES (1, 'abc')", 10, T).unwrap();
+        assert_eq!(db.query("SELECT v FROM probe_t", 10, T).unwrap().rows[0][0], Value::Text("ABC".into()));
+        // vários INSERT num script: o total de linhas afetadas
+        let r = db.query("INSERT INTO probe_t VALUES (2, 'b'); INSERT INTO probe_t VALUES (3, 'c')", 10, T).unwrap();
+        assert_eq!(r.changes, Some(2));
+        // DO e CTE com janela
+        assert!(db.query("DO $$ BEGIN PERFORM 1; PERFORM 2; END $$", 10, T).is_ok());
+        let r = db.query("WITH x AS (SELECT id, row_number() OVER (ORDER BY id) rn FROM probe_t) SELECT count(*) FROM x", 10, T).unwrap();
+        assert_eq!(r.rows[0][0], Value::Text("3".into()));
+        db.query("DROP TABLE probe_t; DROP FUNCTION probe_f()", 10, T).unwrap();
+    }
+
+    #[test]
+    fn a_transaction_opened_in_the_query_box_survives_reads_and_can_be_rolled_back() {
+        let Some(mut db) = writable() else { return };
+        let _g = serial();
+        let _ = db.query("DROP TABLE IF EXISTS probe_t", 10, T);
+        db.query("CREATE TABLE probe_t (id int)", 10, T).unwrap();
+        db.query("BEGIN", 10, T).unwrap();
+        db.query("INSERT INTO probe_t VALUES (10)", 10, T).unwrap();
+        // consultas de leitura no meio não podem desfazer a transação
+        assert_eq!(db.query("SELECT count(*) FROM probe_t", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+        assert_eq!(db.query("SELECT count(*) FROM probe_t", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+        // aplicar mudanças da grade dentro dela é recusado (senão o COMMIT da grade fecharia a do usuário)
+        let t = table(&mut db, "probe_t");
+        let r = db.apply(&t, &[Change::Insert { values: vec![] }]);
+        assert!(matches!(r, Err(Error::Sql(m)) if m.contains("transação aberta")));
+        db.query("COMMIT", 10, T).unwrap();
+        assert_eq!(db.query("SELECT count(*) FROM probe_t", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+        // ROLLBACK de verdade desfaz
+        db.query("BEGIN", 10, T).unwrap();
+        db.query("INSERT INTO probe_t VALUES (11)", 10, T).unwrap();
+        db.query("ROLLBACK", 10, T).unwrap();
+        assert_eq!(db.query("SELECT count(*) FROM probe_t", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+        // fora de transação, as consultas continuam sem deixar nada aberto
+        assert!(!db.in_user_tx().unwrap());
+        db.query("DROP TABLE probe_t", 10, T).unwrap();
+    }
+
     #[test]
     fn the_connection_is_read_only() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         assert_eq!(db.query("DELETE FROM pessoas", 10, T).unwrap_err(), Error::ReadOnly);
         assert_eq!(db.query("INSERT INTO tags VALUES ('a','b','c')", 10, T).unwrap_err(), Error::ReadOnly);
@@ -429,6 +783,7 @@ mod live {
     #[test]
     fn a_slow_query_is_cancelled_and_the_connection_survives() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         let started = Instant::now();
         assert_eq!(db.query("SELECT pg_sleep(8)", 10, Duration::from_millis(400)).unwrap_err(), Error::Timeout);
@@ -439,12 +794,15 @@ mod live {
     #[test]
     fn errors_are_readable() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         let mut db = PgDatabase::connect(&cfg).unwrap();
         match db.query("SELECT * FROM nao_existe", 10, T) {
             Err(Error::Sql(m)) => assert!(m.contains("nao_existe"), "{m}"),
             other => panic!("{other:?}"),
         }
-        assert_eq!(db.query("SELECT 1; SELECT 2", 10, T).unwrap_err(), Error::MultipleStatements);
+        // vários comandos: roda todos e devolve o último conjunto de linhas
+        let r = db.query("SELECT 1 AS a; SELECT 2 AS b", 10, T).unwrap();
+        assert_eq!((r.columns.as_slice(), r.rows[0][0].clone()), (&["b".to_string()][..], Value::Text("2".into())));
         // depois de um erro dentro do cursor a conexão continua boa
         assert!(db.query("SELECT 1", 10, T).is_ok());
     }
@@ -452,6 +810,7 @@ mod live {
     #[test]
     fn wrong_password_wrong_database_and_nothing_listening() {
         let Some(cfg) = cfg() else { return };
+        let _g = serial();
         assert_eq!(PgDatabase::connect(&PgConfig { password: Some("errada".into()), ..cfg.clone() }).err(), Some(Error::Auth));
         assert!(matches!(PgDatabase::connect(&PgConfig { dbname: "nao_existe".into(), ..cfg.clone() }).err(), Some(Error::Sql(m)) if m.contains("nao_existe")));
         assert!(matches!(PgDatabase::connect(&PgConfig { port: 1, ..cfg.clone() }).err(), Some(Error::Connect(_))));

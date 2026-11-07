@@ -23,6 +23,9 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | Atualização no AppImage | Provada só no `.deb` (1.2.2 para 1.2.3); no AppImage o código troca o próprio arquivo e ainda não foi exercitado. Dá para testar agora: abrir o AppImage 1.2.2 e atualizar para 1.3.0 | Agora |
 | Sixel | Segundo protocolo de imagem (`img2sixel`, `chafa -f sixel`); o desenho das imagens do Kitty já serve de base | Se alguém pedir |
 | Imagens na tela cheia e animadas | As imagens do Kitty não aparecem em programas de tela cheia (vim, less) e não animam; sem recorte (`x`, `y`, `w`, `h`) | Se alguém pedir |
+| Editor de Query básico | Rodam scripts, funções com `$$`, triggers, transações e vários comandos (testado), mas o editor não tem cursor móvel nem seleção (só digita no fim e cola com `Ctrl+V`), nem autocompletar, histórico, várias abas, botão de cancelar (só o limite de 10 s), nem exportar resultado | 1.5.0 |
+| Navegação do banco incompleta | A lista mostra tabelas e visões, mas não triggers, funções, sequências nem índices em detalhe; no PostgreSQL os valores chegam como texto (sem tipos próprios); resultado cortado em 1000 linhas | 1.5.0 |
+| MySQL | Só PostgreSQL e SQLite | Se alguém pedir |
 | Blocos na máquina remota | A sessão SSH é um comando em execução; o servidor não ganha blocos nem o prompt do Brasa | Se valer a pena |
 | Comparação de latência | Método e script prontos; falta medir em tela real com GPU contra kitty, alacritty, foot, wezterm | Quando houver forma de medir em tela real (ver `docs/latencia.md`) |
 | Releases 1.2.0 e 1.2.1 apagadas | Tinham a atualização dentro do app quebrada (filtro de endereço sensível a maiúsculas). Quem as instalou troca à mão uma vez | Nada a fazer; só avisar se alguém perguntar |
@@ -112,9 +115,9 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 |---|---|---|---|
 | **M1. Motor SQLite** | Crate `ox-db`: esquema, consulta com limite e tempo máximo, edição pela chave | M | Feito (15 testes) |
 | **M2. Página Banco e conector PostgreSQL** | Página que ocupa o lugar do terminal (como as Configurações), aberta pelo botão Banco da barra da direita: tabela de conexões salvas (conectar, editar, excluir, nova), lista de tabelas, abas Dados, Estrutura, Diagrama e Resultado, consulta fixa embaixo com `Ctrl+Enter`; PostgreSQL e SQLite pelo mesmo motor | G | Feito (30 testes no motor, 8 contra um PostgreSQL real; página testada com os dois bancos) |
-| **M3. Edição na grade** | Editar célula, inserir e apagar linha com mudanças pendentes, aplicar ou descartar numa transação; só leitura como padrão | M | A fazer |
+| **M3. Edição na grade** | Editar célula (dois cliques), inserir (`+ Linha`) e apagar (`×`) com mudanças pendentes, aplicar ou descartar numa transação; sem "modo edição", como no DBeaver; conexão pode ser marcada como somente leitura | M | Feito (testado nos dois bancos e conferido no `psql`) |
 | **M4. Conexões salvas e TLS** | Salvar conexões (sem a senha) e conexão remota com TLS | M | Feito junto com o M2 e os ajustes (TLS testado contra um servidor real) |
-| **M5. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida, teste da atualização no AppImage | P | Por último |
+| **M5. Lançamento 1.4.0** | Versão, README, tag, release conferida | P | Em andamento |
 
 ### M2. Painel Banco e conector PostgreSQL
 - Conexões salvas em `~/.config/brasa/databases.json` (nome, tipo, servidor, porta, usuário, banco ou arquivo; modo 0600). A senha é pedida ao conectar, nunca é gravada em disco e nem existe como campo no arquivo.
@@ -122,7 +125,7 @@ Dois bancos: SQLite (um arquivo, sem servidor) e PostgreSQL (o que o `psql` cone
 - Aberto só para leitura (`default_transaction_read_only`) e com tempo máximo por consulta (`statement_timeout`).
 - Servidor na própria máquina (`localhost`, `127.0.0.1`, `::1`) conecta sem criptografia; qualquer outro **exige TLS**, com o certificado conferido (emissor, nome e validade) contra os certificados do sistema e, se a conexão tiver, contra um arquivo PEM de CA. Sem TLS, a conexão nem é tentada. Mensagens claras para CA desconhecida, nome que não bate e certificado vencido.
 - Esquema pelo catálogo do PostgreSQL (`information_schema`); resultados em texto, como o `psql` mostra; consulta do editor com limite de linhas por cursor.
-- Pronto quando: testes contra um PostgreSQL de verdade (contêiner) cobrem conexão, senha errada, esquema, página, consulta, limite, tempo máximo e só leitura; e o painel abre um SQLite e um PostgreSQL e mostra a grade.\n- Como rodar os testes contra o PostgreSQL: `BRASA_TEST_PG=127.0.0.1:5432 BRASA_TEST_PG_PASSWORD=... cargo test -p ox-db` (sem as variáveis, esses testes passam sem fazer nada).\n- Limite assumido: a proteção de só leitura é contra acidente, não contra o próprio usuário (quem digita `SET default_transaction_read_only = off` no editor a desliga); o botão de edição do M3 será o jeito explícito.
+- Pronto quando: testes contra um PostgreSQL de verdade (contêiner) cobrem conexão, senha errada, esquema, página, query, limite, tempo máximo e só leitura; e o painel abre um SQLite e um PostgreSQL e mostra a grade.\n- Como rodar os testes contra o PostgreSQL: `BRASA_TEST_PG=127.0.0.1:5432 BRASA_TEST_PG_PASSWORD=... cargo test -p ox-db` (sem as variáveis, esses testes passam sem fazer nada).\n- Limite assumido: a proteção de só leitura é contra acidente, não contra o próprio usuário (quem digita `SET default_transaction_read_only = off` no editor a desliga); o botão de edição do M3 será o jeito explícito.
 
 ## 2.0.0 — Outros sistemas (G)
 - macOS e Windows. É a maior mudança: GPUI e o PTY precisam de ajustes em cada sistema.
