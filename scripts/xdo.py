@@ -46,6 +46,8 @@ if __name__ == "__main__":
     if a[0] == "nudge": x.move(700, 400); x.move(710, 410); x.click(900, 500)   # força o primeiro redesenho
     elif a[0] == "click": x.click(int(a[1]), int(a[2]))
     elif a[0] == "type": x.type(a[1])
-    elif a[0] == "key": x.key(a[1])
+    elif a[0] == "key":
+        parts = a[1].split("+"); mods = {"ctrl": "Control_L", "alt": "Alt_L", "shift": "Shift_L"}
+        x.key(parts[-1], tuple(mods[m] for m in parts[:-1]))
     elif a[0] == "drag": x.drag(*map(int, a[1:5]))
     elif a[0] == "wheel": x.click(int(a[1]), int(a[2]), button=4 if a[3] == "up" else 5, count=int(a[4]))

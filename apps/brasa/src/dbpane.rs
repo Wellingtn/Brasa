@@ -3,12 +3,13 @@
 //! congela) e todo banco abre só para leitura. O motor está no crate `ox-db`; a senha nunca é gravada.
 
 use std::collections::HashMap;
+use std::time::Duration;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use gpui::{div, prelude::*, px, rgb, AnyElement, ClickEvent, Context, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ScrollWheelEvent};
 use ox_editor::TextBuffer;
-use ox_db::{export_table, to_tsv, write_result, Format, Database, Db, Kind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
+use ox_db::{export_query, export_table, is_plain_select, to_tsv, write_result, Format, Database, Db, Kind, Options, Page, PgConfig, PgDatabase, QueryResult, SavedConn, Store, Table, Value, DEFAULT_LIMIT, DEFAULT_TIMEOUT};
 
 use crate::dbdiagram;
 use crate::icons::wicon;
@@ -20,6 +21,9 @@ use crate::Workspace;
 
 /// Linhas por página na grade de dados.
 pub const PAGE_SIZE: usize = 100;
+/// Linhas lidas de cada vez no resultado de uma query: a grade rola por qualquer quantidade de linhas, buscando
+/// outro trecho quando chega perto da borda.
+const WINDOW: usize = 1000;
 const ROW_H: f32 = 28.0;
 const HEAD_H: f32 = 38.0;
 const BAR_H: f32 = 40.0;
@@ -183,6 +187,20 @@ pub struct Manager {
     pub connecting: bool,
 }
 
+/// De onde veio o trecho de resultado que a grade mostra, quando a query devolve linhas e pode ser lida aos poucos.
+#[derive(Clone)]
+pub struct Stream {
+    pub sql: String,
+    /// primeira linha do trecho carregado (em `result.rows`)
+    pub base: usize,
+    /// há mais linhas depois do trecho
+    pub more: bool,
+    /// total de linhas, se já foi contado ou se a leitura chegou ao fim
+    pub total: Option<u64>,
+    pub loading: bool,
+    pub req: u64,
+}
+
 /// Exportar a grade ou o resultado: para onde gravar e em que formato.
 pub struct ExportForm {
     pub path: String,
@@ -245,6 +263,7 @@ pub struct DbPane {
     pub sql_drag: bool,
     pub sql_focus: bool,
     pub result: Option<QueryResult>,
+    pub stream: Option<Stream>,
     pub running: bool,
     pub filter: String,
     pub filter_focus: bool,
@@ -291,6 +310,7 @@ impl Default for DbPane {
             sql_drag: false,
             sql_focus: false,
             result: None,
+            stream: None,
             running: false,
             filter: String::new(),
             filter_focus: false,
@@ -703,19 +723,111 @@ impl Workspace {
         p.hist_pos = None;
         let _ = p.history.save(&history_path());
         cx.spawn(async move |this, cx| {
-            let out = cx.background_executor().spawn(async move { db.lock().unwrap().query(&sql, DEFAULT_LIMIT, DEFAULT_TIMEOUT) }).await;
+            let text = sql.clone();
+            let out = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut db = db.lock().unwrap();
+                    // uma query que devolve linhas é lida aos poucos, sem o corte de antes; o resto (scripts, INSERT...) roda inteiro
+                    if is_plain_select(&sql) {
+                        db.window(&sql, 0, WINDOW).map(|r| (r, true))
+                    } else {
+                        db.query(&sql, DEFAULT_LIMIT, DEFAULT_TIMEOUT).map(|r| (r, false))
+                    }
+                })
+                .await;
             let _ = this.update(cx, |ws, cx| {
                 let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
                 p.running = false;
                 let cancelled = std::mem::take(&mut p.cancelling);
                 match out {
-                    Ok(r) => {
+                    Ok((mut r, streamed)) => {
+                        p.stream = streamed.then(|| {
+                            let more = std::mem::take(&mut r.truncated);
+                            Stream { sql: text, base: 0, more, total: (!more).then_some(r.rows.len() as u64), loading: false, req: 0 }
+                        });
                         p.result = Some(r);
                         p.view = View::Result;
                         p.vscroll = 0;
                         p.hscroll = 0.0;
                     }
                     Err(_) if cancelled => p.error = Some("Query cancelada.".into()),
+                    Err(e) => p.error = Some(e.to_string()),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Rolou o resultado? Busca o trecho certo se a grade chegou perto da borda do que está carregado.
+    pub fn db_ensure_window(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let (Some(db), Some(st), Some(res)) = (p.db.clone(), p.stream.as_mut(), p.result.as_ref()) else { return };
+        if st.loading || p.running || p.view != View::Result {
+            return;
+        }
+        let (first, end) = (p.vscroll, st.base + res.rows.len());
+        // o que a grade mostra cabe em ~120 linhas
+        if !(first < st.base || (st.more && first + 120 > end)) {
+            return;
+        }
+        let start = first.saturating_sub(WINDOW / 4);
+        st.loading = true;
+        st.req += 1;
+        let (req, sql) = (st.req, st.sql.clone());
+        let epoch = p.epoch;
+        cx.spawn(async move |this, cx| {
+            let out = cx.background_executor().spawn(async move { db.lock().unwrap().window(&sql, start, WINDOW) }).await;
+            let _ = this.update(cx, |ws, cx| {
+                let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
+                let (Some(st), Some(res)) = (p.stream.as_mut().filter(|s| s.req == req), p.result.as_mut()) else { return };
+                st.loading = false;
+                match out {
+                    Ok(r) => {
+                        st.base = start;
+                        st.more = r.truncated;
+                        if !r.truncated {
+                            st.total = Some((start + r.rows.len()) as u64);
+                        }
+                        res.rows = r.rows;
+                    }
+                    Err(e) => p.error = Some(e.to_string()),
+                }
+                ws.db_ensure_window(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Conta as linhas do resultado (pode demorar em tabelas enormes; dá para cancelar).
+    pub fn db_count(&mut self, cx: &mut Context<Self>) {
+        let Some(p) = self.db.as_mut() else { return };
+        let (Some(db), Some(st)) = (p.db.clone(), p.stream.as_ref()) else { return };
+        if p.running {
+            return;
+        }
+        p.running = true;
+        p.cancelling = false;
+        p.error = None;
+        p.epoch += 1;
+        let (epoch, sql) = (p.epoch, st.sql.clone());
+        cx.spawn(async move |this, cx| {
+            let out = cx.background_executor().spawn(async move { db.lock().unwrap().count(&sql, Duration::from_secs(600)) }).await;
+            let _ = this.update(cx, |ws, cx| {
+                let Some(p) = ws.db.as_mut().filter(|p| p.epoch == epoch) else { return };
+                p.running = false;
+                let cancelled = std::mem::take(&mut p.cancelling);
+                match out {
+                    Ok(n) => {
+                        if let Some(st) = p.stream.as_mut() {
+                            st.total = Some(n);
+                        }
+                    }
+                    Err(_) if cancelled => p.error = Some("Contagem cancelada.".into()),
                     Err(e) => p.error = Some(e.to_string()),
                 }
                 cx.notify();
@@ -948,10 +1060,15 @@ impl Workspace {
                 p.offset = p.offset.saturating_sub(PAGE_SIZE);
                 self.db_load_page(cx);
             }
+            "pagedown" if p.view == View::Result => p.vscroll += 30,
+            "pageup" if p.view == View::Result => p.vscroll = p.vscroll.saturating_sub(30),
             "down" => p.vscroll += 1,
             "up" => p.vscroll = p.vscroll.saturating_sub(1),
             "escape" => self.show_db = false,
             _ => return typing,
+        }
+        if self.db.as_ref().is_some_and(|p| p.view == View::Result) {
+            self.db_ensure_window(cx);
         }
         cx.notify();
         true
@@ -1042,6 +1159,7 @@ impl Workspace {
         let format = if form.json { Format::Json } else { Format::Csv };
         let (db, table, sort) = (p.db.clone(), p.selected.and_then(|i| p.tables.get(i)).cloned(), p.sort.clone());
         let view = p.view;
+        let stream_sql = p.stream.as_ref().filter(|_| view == View::Result).map(|s| s.sql.clone());
         let memory = self.db_grid_data();
         let Some(p) = self.db.as_mut() else { return };
         if p.running {
@@ -1057,6 +1175,8 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     match (view, db, table, memory) {
+                        // o resultado inteiro, lido aos poucos do banco (sem o limite do que está na tela)
+                        (View::Result, Some(db), _, _) if stream_sql.is_some() => export_query(&mut db.lock().unwrap(), stream_sql.as_deref().unwrap_or(""), format, &path),
                         (View::Data, Some(db), Some(t), _) => export_table(&mut db.lock().unwrap(), &t, sort.as_ref().map(|(c, a)| (c.as_str(), *a)), format, &path),
                         (_, _, _, Some((cols, rows))) => write_result(&path, format, &cols, &rows).map(|()| rows.len() as u64),
                         _ => Err(ox_db::Error::Sql("não há nada para exportar nesta aba".into())),
@@ -1099,14 +1219,13 @@ impl Workspace {
 
     /// Grade de resultados: cabeçalho fixo, linhas com rolagem vertical e horizontal. `sortable`: clicar no cabeçalho
     /// ordena. `edit`: na aba Dados com o modo edição, dois cliques abrem a célula e há um "×" por linha.
-    fn db_grid(&self, id: &'static str, cols: &[String], rows: &[Vec<Value>], types: &[String], view: (f32, f32), sortable: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn db_grid(&self, id: &'static str, cols: &[String], rows: &[Vec<Value>], types: &[String], view: (f32, f32), sortable: bool, win: (usize, usize), cx: &mut Context<Self>) -> AnyElement {
         let p = self.db.as_ref().expect("painel aberto");
         let mono = self.mono.clone();
         let accent = self.focus_color();
         let widths = col_widths(cols, rows);
         let total_w: f32 = widths.iter().sum::<f32>();
-        let n_real = rows.len();
-        let total = n_real;
+        let (base, total) = win;
         let visible = ((view.1 - HEAD_H) / ROW_H).floor().max(1.0) as usize;
         let max_scroll = total.saturating_sub(visible);
         let first = p.vscroll.min(max_scroll);
@@ -1164,7 +1283,7 @@ impl Workspace {
             let bg: Option<gpui::Hsla> = if ri % 2 == 1 { Some(rgb(c_code_bg()).into()) } else { None };
             let mut row = div().flex_none().h(px(ROW_H)).flex().items_center().ml(px(-hscroll)).when_some(bg, |d, c| d.bg(c));
             for ci in 0..ncols {
-                let v = rows.get(ri).and_then(|r| r.get(ci));
+                let v = ri.checked_sub(base).and_then(|k| rows.get(k)).and_then(|r| r.get(ci));
                 let (text, muted) = (v.map_or(String::new(), Value::display), matches!(v, Some(Value::Null | Value::Blob { .. })));
                 let mut cell = div()
                     .id(("db-cell", ri * 512 + ci))
@@ -1218,6 +1337,7 @@ impl Workspace {
                         p.vscroll = (p.vscroll as i64 - (dy / ROW_H).round() as i64).clamp(0, max_scroll as i64) as usize;
                     }
                 }
+                this.db_ensure_window(cx);
                 cx.notify();
             }))
             .child(header)
@@ -1577,7 +1697,10 @@ impl Workspace {
         let n_tables = p.tables.iter().filter(|t| !t.is_view).count();
         let n_views = p.tables.len() - n_tables;
         let n_rel: usize = p.tables.iter().filter(|t| !t.is_view).map(|t| t.foreign_keys.len()).sum();
-        let result_rows = p.result.as_ref().map(|x| x.rows.len());
+        let result_rows = p.result.as_ref().map(|x| match &p.stream {
+            Some(s) => s.total.map_or(format!("{}+", s.base + x.rows.len()), |t| t.to_string()),
+            None => x.rows.len().to_string(),
+        });
         let (writable, applying) = (p.writable, p.running);
         let export_form = p.export.as_ref().map(|e| (e.path.clone(), e.json));
         let show_export_bar = export_form.is_some() && matches!(view, View::Data | View::Result);
@@ -1711,6 +1834,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             if let Some(p) = this.db.as_mut() {
                                 p.result = None;
+                                p.stream = None;
                                 p.view = View::Data;
                             }
                             cx.notify();
@@ -1738,7 +1862,7 @@ impl Workspace {
                             None => format!("{from}–{to}"),
                         };
                         footer_nav = Some((offset > 0, pg.truncated));
-                        self.db_grid("db-data", &pg.columns, &pg.rows, &types, area, true, cx)
+                        self.db_grid("db-data", &pg.columns, &pg.rows, &types, area, true, (0, pg.rows.len()), cx)
                     }
                     None => div().flex_1().p_3().text_size(px(12.)).text_color(rgb(if error.is_some() { RED } else { c_muted() })).child(error.clone().unwrap_or_else(|| if selected.is_some() { "Carregando…".into() } else { "O banco não tem tabelas.".into() })).into_any_element(),
                 }
@@ -1764,7 +1888,7 @@ impl Workspace {
                             })
                             .collect();
                         footer_left = if t.indexes.is_empty() { "Sem índices".to_string() } else { format!("Índices: {}", t.indexes.join(", ")) };
-                        self.db_grid("db-struct", &cols, &rows, &[], area, false, cx)
+                        self.db_grid("db-struct", &cols, &rows, &[], area, false, (0, rows.len()), cx)
                     }
                     None => div().flex_1().p_3().text_size(px(12.)).text_color(rgb(c_muted())).child("Escolha uma tabela.").into_any_element(),
                 }
@@ -1784,7 +1908,7 @@ impl Workspace {
                     })
                     .collect();
                 footer_left = format!("{} objetos · clique numa célula e use Ctrl+C para copiar a definição", rows.len());
-                self.db_grid("db-objects", &cols, &rows, &[], area, false, cx)
+                self.db_grid("db-objects", &cols, &rows, &[], area, false, (0, rows.len()), cx)
             }
             View::Diagram => {
                 footer_left = format!("{n_tables} tabelas · {n_rel} relações");
@@ -1794,8 +1918,27 @@ impl Workspace {
                 let res = self.db.as_ref().unwrap().result.clone();
                 match res {
                     Some(res) if !res.columns.is_empty() => {
-                        footer_left = format!("{} linhas em {} ms{}", res.rows.len(), res.elapsed.as_millis(), if res.truncated { format!(" (cortado em {DEFAULT_LIMIT})") } else { String::new() });
-                        self.db_grid("db-result", &res.columns, &res.rows, &[], area, false, cx)
+                        let stream = self.db.as_ref().unwrap().stream.clone();
+                        match stream {
+                            Some(st) => {
+                                let end = st.base + res.rows.len();
+                                // com o total desconhecido a grade deixa rolar um pouco além do que já foi lido
+                                let total = st.total.map_or(if st.more { end + 100 } else { end }, |t| t as usize);
+                                footer_left = format!(
+                                    "linhas {}–{} lidas · {} · {} ms{}",
+                                    st.base + 1,
+                                    end,
+                                    st.total.map_or("total ainda não contado".to_string(), |t| format!("{t} no total")),
+                                    res.elapsed.as_millis(),
+                                    if st.loading { " · carregando…" } else { "" }
+                                );
+                                self.db_grid("db-result", &res.columns, &res.rows, &[], area, false, (st.base, total), cx)
+                            }
+                            None => {
+                                footer_left = format!("{} linhas em {} ms{}", res.rows.len(), res.elapsed.as_millis(), if res.truncated { format!(" (cortado em {DEFAULT_LIMIT})") } else { String::new() });
+                                self.db_grid("db-result", &res.columns, &res.rows, &[], area, false, (0, res.rows.len()), cx)
+                            }
+                        }
                     }
                     Some(res) => {
                         footer_left = format!("{} ms", res.elapsed.as_millis());
@@ -1832,6 +1975,7 @@ impl Workspace {
         footer = footer.child(div().flex_1().min_w_0().truncate().text_size(px(11.)).text_color(rgb(c_muted())).child(footer_left));
         if matches!(view, View::Data | View::Result) && footer_nav.is_some() | (view == View::Result) {
             footer = footer
+                .children((view == View::Result && self.db.as_ref().is_some_and(|p| p.stream.as_ref().is_some_and(|s| s.total.is_none()))).then(|| self.db_btn("db-count", "Contar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_count(cx)))))
                 .child(self.db_btn("db-copy-grid", "Copiar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_copy_grid(cx))))
                 .child(self.db_btn("db-export", "Exportar", false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_open_export(cx))));
         }
@@ -1847,7 +1991,7 @@ impl Workspace {
                 .bg(with_alpha(accent, 0x14))
                 .border_b_1()
                 .border_color(rgb(c_card_border()))
-                .child(div().flex_none().text_size(px(12.)).text_color(rgb(c_text())).child(if view == View::Data { "Exportar a tabela inteira para:" } else { "Exportar o resultado para:" }))
+                .child(div().flex_none().text_size(px(12.)).text_color(rgb(c_text())).child(if view == View::Data { "Exportar a tabela inteira para:" } else { "Exportar o resultado inteiro para:" }))
                 .child(div().flex_1().min_w_0().h(px(28.)).px(px(10.)).flex().items_center().rounded(px(5.)).border_1().border_color(rgb(accent)).bg(rgb(c_bg())).font_family(mono.clone()).text_size(px(12.)).overflow_hidden().whitespace_nowrap().text_color(rgb(c_text())).child(format!("{path}▏")))
                 .child(self.db_btn("db-fmt", if json { "JSON" } else { "CSV" }, false).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_toggle_export_format(cx))))
                 .child(self.db_btn("db-export-go", if applying { "Exportando…" } else { "Exportar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_export(cx))))
@@ -1900,6 +2044,7 @@ impl Workspace {
         } else if let Some(res) = &p.result {
             match res.changes {
                 Some(n) => (format!("{n} linha(s) afetada(s)"), c_muted()),
+                None if p.stream.is_some() => (format!("Executada · {} ms", res.elapsed.as_millis()), 0x8fd7ae),
                 None => (format!("Executada · {} linhas em {} ms", res.rows.len(), res.elapsed.as_millis()), 0x8fd7ae),
             }
         } else {
@@ -2008,7 +2153,6 @@ impl Workspace {
                     .border_color(rgb(c_card_border()))
                     .child(div().flex_none().h(px(24.)).px(px(10.)).flex().items_center().rounded(px(5.)).bg(rgb(c_surface())).text_size(px(12.)).font_weight(FontWeight::MEDIUM).text_color(rgb(accent)).child("Query"))
                     .child(div().flex_1())
-                    .children(wide.then(|| div().flex_none().text_size(px(11.)).text_color(rgb(c_muted())).child(format!("Limite {DEFAULT_LIMIT} linhas"))))
                     .child(self.db_btn("db-run", if running { if cancelling { "Cancelando…" } else { "Cancelar" } } else if wide { "Executar  Ctrl+Enter" } else { "Executar" }, true).on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.db_run_sql(cx)))),
             )
             .child(editor)
