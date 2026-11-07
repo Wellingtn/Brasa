@@ -56,15 +56,17 @@ pub struct EditForm {
     pub read_only: bool,
     /// campo com o teclado: 0 nome; PostgreSQL: 1 servidor, 2 porta, 3 usuário, 4 banco, 5 CA; SQLite: 1 arquivo
     pub focus: usize,
+    /// posição do cursor (em caracteres) no campo com o teclado; passar do fim vale como o fim
+    pub cursor: usize,
 }
 
 impl EditForm {
     fn new() -> Self {
-        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), ca: String::new(), read_only: false, focus: 0 }
+        Self { id: 0, name: String::new(), kind: Kind::Postgres, host: "localhost".into(), port: "5432".into(), user: "postgres".into(), dbname: "postgres".into(), path: String::new(), ca: String::new(), read_only: false, focus: 0, cursor: usize::MAX }
     }
 
     fn from_saved(c: &SavedConn) -> Self {
-        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), ca: c.ca_file.clone(), read_only: c.read_only, focus: 0 }
+        Self { id: c.id, name: c.name.clone(), kind: c.kind, host: c.host.clone(), port: c.port.to_string(), user: c.user.clone(), dbname: c.dbname.clone(), path: c.path.clone(), ca: c.ca_file.clone(), read_only: c.read_only, focus: 0, cursor: usize::MAX }
     }
 
     fn count(&self) -> usize {
@@ -73,6 +75,59 @@ impl EditForm {
         } else {
             2
         }
+    }
+
+    /// Cursor dentro do campo atual (nunca passa do fim).
+    fn cur(&mut self) -> usize {
+        let n = self.field_mut().chars().count();
+        self.cursor = self.cursor.min(n);
+        self.cursor
+    }
+
+    fn byte_at(text: &str, chars: usize) -> usize {
+        text.char_indices().nth(chars).map_or(text.len(), |(i, _)| i)
+    }
+
+    /// Escreve no cursor e avança.
+    fn insert(&mut self, s: &str) {
+        let at = self.cur();
+        let f = self.field_mut();
+        let b = Self::byte_at(f, at);
+        f.insert_str(b, s);
+        self.cursor = at + s.chars().count();
+    }
+
+    /// Apaga o caractere antes (`back`) ou depois do cursor.
+    fn erase(&mut self, back: bool) {
+        let at = self.cur();
+        let f = self.field_mut();
+        let n = f.chars().count();
+        let del = if back {
+            if at == 0 {
+                return;
+            }
+            at - 1
+        } else {
+            if at >= n {
+                return;
+            }
+            at
+        };
+        let (a, b) = (Self::byte_at(f, del), Self::byte_at(f, del + 1));
+        f.replace_range(a..b, "");
+        self.cursor = del;
+    }
+
+    /// Anda o cursor: `Some(n)` soma n caracteres (negativo volta), Home e End vão às pontas.
+    fn step(&mut self, delta: isize) {
+        let at = self.cur() as isize;
+        let n = self.field_mut().chars().count() as isize;
+        self.cursor = (at + delta).clamp(0, n) as usize;
+    }
+
+    fn focus_on(&mut self, idx: usize) {
+        self.focus = idx;
+        self.cursor = usize::MAX;
     }
 
     fn is_port(&self) -> bool {
@@ -728,9 +783,9 @@ impl Workspace {
         if p.db.is_none() {
             if let Some(f) = p.manager.edit.as_mut() {
                 if f.is_port() {
-                    f.field_mut().push_str(&one_line.chars().filter(char::is_ascii_digit).collect::<String>());
+                    f.insert(&one_line.chars().filter(char::is_ascii_digit).collect::<String>());
                 } else {
-                    f.field_mut().push_str(one_line);
+                    f.insert(one_line);
                 }
                 return true;
             }
@@ -795,15 +850,19 @@ impl Workspace {
                     "escape" => p.manager.edit = None,
                     "tab" => {
                         let n = f.count();
-                        f.focus = if k.modifiers.shift { (f.focus + n - 1) % n } else { (f.focus + 1) % n };
+                        let next = if k.modifiers.shift { (f.focus + n - 1) % n } else { (f.focus + 1) % n };
+                        f.focus_on(next);
                     }
-                    "backspace" => {
-                        f.field_mut().pop();
-                    }
+                    "backspace" => f.erase(true),
+                    "delete" => f.erase(false),
+                    "left" if !ctrl && !alt => f.step(-1),
+                    "right" if !ctrl && !alt => f.step(1),
+                    "home" => f.step(isize::MIN / 2),
+                    "end" => f.step(isize::MAX / 2),
                     _ if !ctrl && !alt => match (&k.key_char, key.as_str()) {
                         (Some(c), _) if f.is_port() && !c.chars().all(|ch| ch.is_ascii_digit()) => return true,
-                        (Some(c), _) => f.field_mut().push_str(c),
-                        (None, "space") if !f.is_port() => f.field_mut().push(' '),
+                        (Some(c), _) => f.insert(c),
+                        (None, "space") if !f.is_port() => f.insert(" "),
                         _ => return false,
                     },
                     _ => return false,
@@ -1530,6 +1589,7 @@ impl Workspace {
         let error = p.error.clone();
         let conns: Vec<SavedConn> = p.store.conns.clone();
         let scroll = p.dg_y.clamp(0.0, 4000.0);
+        let form_cursor = p.manager.edit.as_ref().map_or(0, |f| f.cursor);
         let edit = p.manager.edit.as_ref().map(|f| (f.id, f.kind, f.focus, f.name.clone(), f.host.clone(), f.port.clone(), f.user.clone(), f.dbname.clone(), f.path.clone(), f.ca.clone(), f.read_only));
         let width = (r.w - 64.0).clamp(240.0, 1100.0);
 
@@ -1559,11 +1619,17 @@ impl Workspace {
                         .text_color(rgb(c_text()))
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .child(format!("{value}{}", if on { "▏" } else { "" }))
+                        .child(if on {
+                            let at = form_cursor.min(value.chars().count());
+                            let b = value.char_indices().nth(at).map_or(value.len(), |(i, _)| i);
+                            format!("{}▏{}", &value[..b], &value[b..])
+                        } else {
+                            value
+                        })
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.focused_pane = Some(PaneKind::Db);
                             if let Some(f) = this.db.as_mut().and_then(|p| p.manager.edit.as_mut()) {
-                                f.focus = idx;
+                                f.focus_on(idx);
                             }
                             cx.notify();
                         })),
@@ -1611,7 +1677,7 @@ impl Workspace {
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         if let Some(f) = this.db.as_mut().and_then(|p| p.manager.edit.as_mut()) {
                             f.kind = k;
-                            f.focus = 0;
+                            f.focus_on(0);
                         }
                         cx.notify();
                     }))
@@ -2462,6 +2528,30 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn form_fields_have_a_cursor_that_moves_and_edits_in_the_middle() {
+        let mut f = EditForm::new();
+        f.focus_on(1); // servidor: "localhost"
+        f.step(-4); // antes de "host"
+        f.insert("-é");
+        assert_eq!(f.host, "local-éhost");
+        f.erase(true); // apaga o "é"
+        f.erase(false); // apaga o "h"
+        assert_eq!(f.host, "local-ost");
+        f.step(isize::MIN / 2);
+        f.erase(true); // no começo não apaga nada
+        f.insert(">");
+        assert_eq!(f.host, ">local-ost");
+        f.step(isize::MAX / 2);
+        f.erase(false); // no fim não apaga nada
+        f.insert("!");
+        assert_eq!(f.host, ">local-ost!");
+        // trocar de campo põe o cursor no fim do novo
+        f.focus_on(3);
+        f.insert("2");
+        assert_eq!(f.user, "postgres2");
+    }
+
     use super::*;
 
     #[test]
