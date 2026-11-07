@@ -9,6 +9,8 @@
 //! bytes (as mais antigas saem primeiro). Só se aceita transmissão direta (`t=d`): ler arquivo ou
 //! memória compartilhada a pedido de quem escreve no terminal seria abrir o disco para a máquina remota.
 
+mod sixel;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,21 +27,31 @@ const ESC: u8 = 0x1b;
 // ---------------------------------------------------------------------------------------------
 // Separar as sequências do fluxo
 
-/// Um pedaço do fluxo: texto comum para o terminal ou o corpo de uma sequência APC (`ESC _ ... ESC \`).
+/// Um pedaço do fluxo: texto comum para o terminal, o corpo de uma sequência APC (`ESC _ ... ESC \`) ou o de uma
+/// sequência DCS de Sixel (`ESC P ... q ... ESC \`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Piece {
     Text(Vec<u8>),
     /// o que há entre `ESC _` e `ESC \`; vazio se passou do limite e foi descartado
     Apc(Vec<u8>),
+    /// o que há entre `ESC P` e `ESC \` de uma imagem Sixel (parâmetros, `q` e dados); vazio se passou do limite.
+    /// Outras sequências DCS (tmux, DECRQSS...) seguem como texto para o terminal.
+    Sixel(Vec<u8>),
 }
 
 #[derive(Default)]
 pub struct Splitter {
-    in_apc: bool,
+    /// dentro de uma sequência: `_` (APC) ou `P` (DCS); 0 = fora
+    kind: u8,
     /// o último byte do pedaço anterior foi um ESC solto
     esc_pending: bool,
     buf: Vec<u8>,
     overflow: bool,
+}
+
+/// Parâmetros de um DCS de Sixel: dígitos e `;` e depois `q`.
+fn is_sixel(body: &[u8]) -> bool {
+    body.iter().position(|&b| !(b.is_ascii_digit() || b == b';')).is_some_and(|i| body[i] == b'q')
 }
 
 impl Splitter {
@@ -51,32 +63,45 @@ impl Splitter {
         let mut out: Vec<Piece> = Vec::new();
         let mut text: Vec<u8> = Vec::new();
         for &b in bytes {
-            if self.in_apc {
+            if self.kind != 0 {
                 if self.esc_pending {
                     self.esc_pending = false;
                     if b == b'\\' {
-                        self.in_apc = false;
+                        let kind = std::mem::take(&mut self.kind);
                         let body = if self.overflow { Vec::new() } else { std::mem::take(&mut self.buf) };
                         self.buf.clear();
                         self.overflow = false;
-                        out.push(Piece::Apc(body));
+                        if !text.is_empty() {
+                            out.push(Piece::Text(std::mem::take(&mut text)));
+                        }
+                        if kind == b'_' {
+                            out.push(Piece::Apc(body));
+                        } else if is_sixel(&body) || body.is_empty() {
+                            out.push(Piece::Sixel(body));
+                        } else {
+                            // outro DCS: devolve inteiro ao terminal
+                            let mut raw = vec![ESC, b'P'];
+                            raw.extend_from_slice(&body);
+                            raw.extend_from_slice(&[ESC, b'\\']);
+                            out.push(Piece::Text(raw));
+                        }
                         continue;
                     }
                     // ESC dentro da sequência que não fecha: faz parte dos dados
-                    self.push_apc(ESC);
+                    self.push_body(ESC);
                 }
                 if b == ESC {
                     self.esc_pending = true;
                 } else {
-                    self.push_apc(b);
+                    self.push_body(b);
                 }
             } else if self.esc_pending {
                 self.esc_pending = false;
-                if b == b'_' {
+                if b == b'_' || b == b'P' {
                     if !text.is_empty() {
                         out.push(Piece::Text(std::mem::take(&mut text)));
                     }
-                    self.in_apc = true;
+                    self.kind = b;
                 } else {
                     text.push(ESC);
                     if b == ESC {
@@ -97,7 +122,7 @@ impl Splitter {
         out
     }
 
-    fn push_apc(&mut self, b: u8) {
+    fn push_body(&mut self, b: u8) {
         if self.buf.len() >= MAX_PAYLOAD + 512 {
             self.overflow = true;
         } else {
@@ -511,6 +536,19 @@ impl Gfx {
         }
     }
 
+    /// Uma imagem Sixel (corpo de `ESC P ... ESC \\`): decodifica, guarda e manda mostrar na posição do cursor, como
+    /// o Kitty com `a=T`. Imagem inválida ou grande demais é ignorada.
+    pub fn sixel(&mut self, body: &[u8], cell: (f32, f32), room_cols: usize) -> Outcome {
+        self.next_uid += 1;
+        let Ok(img) = sixel::decode(body, self.next_uid) else { return Outcome::default() };
+        self.next_auto_id = self.next_auto_id.wrapping_add(1).max(1);
+        let id = 0x8000_0000 | self.next_auto_id;
+        let (w, h, uid) = (img.width, img.height, img.uid);
+        self.store(id, img);
+        let (cols, rows) = fit_cells(w, h, 0, 0, cell, room_cols);
+        Outcome { reply: None, show: Some(Show { image: id, uid, cols, rows, keep_cursor: false }) }
+    }
+
     /// Guarda uma imagem posta e devolve o número da posição, para [`filler`].
     pub fn place(&mut self, show: &Show) -> u16 {
         let seq = self.next_seq;
@@ -549,6 +587,36 @@ mod tests {
         w.write_image_data(&[255, 0, 0, 255, 0, 255, 0, 128]).unwrap();
         drop(w);
         out
+    }
+
+    #[test]
+    fn splitter_hands_sixel_over_and_other_dcs_back_to_the_terminal() {
+        let mut s = Splitter::new();
+        let p = s.feed(b"a\x1bP0;1q#0~\x1b\\b\x1bP$q\"q\x1b\\c");
+        assert_eq!(p[0], Piece::Text(b"a".to_vec()));
+        assert_eq!(p[1], Piece::Sixel(b"0;1q#0~".to_vec()));
+        assert_eq!(p[2], Piece::Text(b"b".to_vec()));
+        assert_eq!(p[3], Piece::Text(b"\x1bP$q\"q\x1b\\".to_vec()));
+        assert_eq!(p[4], Piece::Text(b"c".to_vec()));
+        // em qualquer fronteira de pedaço
+        let all = b"x\x1bPq#0~\x1b\\y";
+        for cut in 1..all.len() {
+            let mut s = Splitter::new();
+            let mut got = s.feed(&all[..cut]);
+            got.extend(s.feed(&all[cut..]));
+            let sixels: Vec<_> = got.iter().filter(|p| matches!(p, Piece::Sixel(_))).collect();
+            assert_eq!(sixels, [&Piece::Sixel(b"q#0~".to_vec())], "corte em {cut}");
+        }
+    }
+
+    #[test]
+    fn a_sixel_becomes_a_shown_image_like_kitty() {
+        let mut g = Gfx::new();
+        let out = g.sixel(b"q#1;2;100;0;0#1!16~$-!16~", (8.0, 16.0), 80);
+        let show = out.show.expect("mostra");
+        assert!(show.cols >= 1 && show.rows >= 1 && !show.keep_cursor);
+        assert!(g.image(show.image).is_some());
+        assert!(g.sixel(b"lixo", (8.0, 16.0), 80).show.is_none());
     }
 
     #[test]

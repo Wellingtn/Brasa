@@ -225,7 +225,11 @@ impl TermView {
                 Piece::Text(t) => self.parser.advance(&mut self.term, &t),
                 Piece::Apc(body) => {
                     had_apc = true;
-                    self.graphics(&body, &mut gfx_replies);
+                    self.graphics(&body, &mut gfx_replies, false);
+                }
+                Piece::Sixel(body) => {
+                    had_apc = true;
+                    self.graphics(&body, &mut gfx_replies, true);
                 }
             }
         }
@@ -241,10 +245,10 @@ impl TermView {
 
     /// Uma sequência do protocolo gráfico: guarda a imagem e, se for para mostrar, reserva na grade as células
     /// que ela ocupa (caracteres de [`filler`]) e deixa o cursor logo depois, como o Kitty.
-    fn graphics(&mut self, body: &[u8], replies: &mut Vec<String>) {
+    fn graphics(&mut self, body: &[u8], replies: &mut Vec<String>, sixel: bool) {
         let (col, alt) = (self.term.grid().cursor.point.column.0, self.is_alt_screen());
         let room = self.cols.saturating_sub(col);
-        let out = self.gfx.apc(body, self.cell_px, room);
+        let out = if sixel { self.gfx.sixel(body, self.cell_px, room) } else { self.gfx.apc(body, self.cell_px, room) };
         replies.extend(out.reply);
         let Some(show) = out.show.filter(|_| !alt) else { return };
         let seq = self.gfx.place(&show);
@@ -1228,6 +1232,22 @@ mod tests {
         assert!(bytes.load(Ordering::Relaxed) > before, "o psql parou de responder");
         mgr.run_command(id, "\\q").unwrap();
         mgr.kill(id).unwrap();
+    }
+
+    /// Um Sixel que chega pelo fluxo vira uma imagem na grade (como no Kitty) e o texto em volta segue normal.
+    #[test]
+    fn a_sixel_in_the_stream_becomes_an_image_in_the_grid() {
+        let mut t = TermView::new(40, 10);
+        t.set_cell_px(8.0, 16.0);
+        // 16 colunas x 12 linhas de pixels (2 faixas), vermelho
+        t.feed(b"antes\r\n\x1bP0;1;0q#1;2;100;0;0#1!16~-!16~\x1b\\depois\r\n");
+        let found = (0..10).filter_map(|l| t.image_at(l)).count();
+        assert!(found >= 1, "nenhuma linha da grade tem a imagem");
+        let all: String = (0..10).map(|l| t.line_text(l)).collect::<Vec<_>>().join("|");
+        assert!(all.contains("antes") && all.contains("depois"), "{all}");
+        let (pl, _, _) = (0..10).find_map(|l| t.image_at(l)).unwrap();
+        let img = t.render_image(pl);
+        assert!(img.is_some());
     }
 
     #[test]
