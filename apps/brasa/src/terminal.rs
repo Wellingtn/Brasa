@@ -1104,6 +1104,132 @@ mod tests {
         mgr.kill(id).unwrap();
     }
 
+    /// Saída enorme (milhões de linhas, como um `SELECT` sem limite no psql) não pode travar o terminal: o shell
+    /// segue respondendo e o tempo fica na casa de segundos. Rode com `--ignored` (leva alguns segundos).
+    #[test]
+    #[ignore]
+    fn huge_output_keeps_the_terminal_responsive() {
+        use ox_pty::{PromptConfig, PtyEvents, PtyManager, SessionId, SpawnConfig};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        struct Feed(Arc<Mutex<TermView>>, Arc<AtomicU64>);
+        impl PtyEvents for Feed {
+            fn on_output(&self, _: SessionId, bytes: &[u8]) {
+                self.0.lock().unwrap().feed(bytes);
+                self.1.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            }
+            fn on_exit(&self, _: SessionId) {}
+        }
+        let term = Arc::new(Mutex::new(TermView::new(120, 40)));
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mgr = PtyManager::new();
+        let id = mgr
+            .spawn(SpawnConfig { shell: Some("/bin/bash".into()), cols: 120, rows: 40, prompt: Some(PromptConfig { text: "❯".into(), color: None }), ..Default::default() }, Arc::new(Feed(term.clone(), bytes.clone())))
+            .unwrap();
+        // espera a saída parar (sem pegar o trinco do terminal enquanto ela corre)
+        let quiet = |limit: u64| {
+            let t0 = Instant::now();
+            let mut last = (u64::MAX, Instant::now());
+            loop {
+                let n = bytes.load(Ordering::Relaxed);
+                if n != last.0 {
+                    last = (n, Instant::now());
+                } else if last.1.elapsed() > Duration::from_millis(800) {
+                    return t0.elapsed() - Duration::from_millis(800);
+                }
+                assert!(t0.elapsed() < Duration::from_secs(limit), "a saída não terminou em {limit} s");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        quiet(10);
+        let start = bytes.load(Ordering::Relaxed);
+        mgr.run_command(id, "seq 1 3000000 | awk '{printf \"%10d | nome_da_pessoa_%d | 2026-11-07 | 123.45 | texto qualquer para encher a linha\\n\", $1, $1}'").unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let took = quiet(120);
+        let mb = (bytes.load(Ordering::Relaxed) - start) as f64 / 1e6;
+        println!("{mb:.0} MB em {took:?} ({:.0} MB/s)", mb / took.as_secs_f64());
+        let t0 = Instant::now();
+        let m = term.lock().unwrap().blocks("❯");
+        println!("blocks(): {:?}, {} blocos", t0.elapsed(), m.blocks.len());
+        assert!(m.idle, "o prompt voltou");
+        mgr.run_command(id, "echo vivo").unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        let m = term.lock().unwrap().blocks("❯");
+        assert!(m.idle && m.blocks.iter().any(|b| b.command == "echo vivo"), "o shell seguiu respondendo");
+        mgr.kill(id).unwrap();
+    }
+
+    /// O psql de verdade dentro do terminal, com 2 milhões de linhas de um `SELECT` (precisa de `BRASA_TEST_PG`).
+    #[test]
+    #[ignore]
+    fn psql_interactive_with_two_million_rows() {
+        use ox_pty::{PromptConfig, PtyEvents, PtyManager, SessionId, SpawnConfig};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        struct Feed(Arc<Mutex<TermView>>, Arc<AtomicU64>);
+        impl PtyEvents for Feed {
+            fn on_output(&self, _: SessionId, bytes: &[u8]) {
+                self.0.lock().unwrap().feed(bytes);
+                self.1.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+            }
+            fn on_exit(&self, _: SessionId) {}
+        }
+        let term = Arc::new(Mutex::new(TermView::new(120, 40)));
+        let bytes = Arc::new(AtomicU64::new(0));
+        let mgr = PtyManager::new();
+        let id = mgr
+            .spawn(SpawnConfig { shell: Some("/bin/bash".into()), cols: 120, rows: 40, prompt: Some(PromptConfig { text: "❯".into(), color: None }), ..Default::default() }, Arc::new(Feed(term.clone(), bytes.clone())))
+            .unwrap();
+        // espera a saída parar (sem pegar o trinco do terminal enquanto ela corre)
+        let quiet = |limit: u64| {
+            let t0 = Instant::now();
+            let mut last = (u64::MAX, Instant::now());
+            loop {
+                let n = bytes.load(Ordering::Relaxed);
+                if n != last.0 {
+                    last = (n, Instant::now());
+                } else if last.1.elapsed() > Duration::from_millis(800) {
+                    return t0.elapsed() - Duration::from_millis(800);
+                }
+                assert!(t0.elapsed() < Duration::from_secs(limit), "a saída não terminou em {limit} s");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+        quiet(10);
+        let start = bytes.load(Ordering::Relaxed);
+        let Ok(target) = std::env::var("BRASA_TEST_PG") else { return };
+        let (host, port) = target.split_once(':').unwrap();
+        let pw = std::env::var("BRASA_TEST_PG_PASSWORD").unwrap_or_default();
+        let db = std::env::var("BRASA_TEST_PG_DB").unwrap_or_else(|_| "postgres".into());
+        mgr.run_command(id, &format!("PGPASSWORD={pw} psql -h {host} -p {port} -U postgres -d {db}")).unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        mgr.run_command(id, "\\pset pager off").unwrap();
+        // sem FETCH_COUNT o psql junta todas as linhas na memória antes de mostrar a primeira
+        mgr.run_command(id, "\\set FETCH_COUNT 20000").unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let start = bytes.load(Ordering::Relaxed);
+        mgr.run_command(id, "select i, md5(i::text), now() from generate_series(1, 2000000) i;").unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        let took = quiet(120);
+        let mb = (bytes.load(Ordering::Relaxed) - start) as f64 / 1e6;
+        println!("{mb:.0} MB em {took:?} ({:.0} MB/s)", mb / took.as_secs_f64());
+        let t0 = Instant::now();
+        let m = term.lock().unwrap().blocks("❯");
+        println!("blocks(): {:?}, {} blocos", t0.elapsed(), m.blocks.len());
+        let _ = m;
+        // o psql continua vivo: responde a uma nova consulta e sai
+        let before = bytes.load(Ordering::Relaxed);
+        mgr.run_command(id, "select 42 as resposta;").unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+        assert!(bytes.load(Ordering::Relaxed) > before, "o psql parou de responder");
+        mgr.run_command(id, "\\q").unwrap();
+        mgr.kill(id).unwrap();
+    }
+
     #[test]
     fn palette_256_cube_and_gray() {
         assert_eq!(indexed(16), 0x000000);

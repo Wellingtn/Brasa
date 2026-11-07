@@ -142,7 +142,7 @@ Sai da lista de limites que a própria 1.4.0 deixou (e da sonda de SQL feita no 
 | **A2. Edição só por SQL** | Tira a edição na grade (duplo clique, ×, + Linha, pendentes); Dados e Resultado passam a só mostrar. Quem altera dados escreve `UPDATE`/`INSERT`/`DELETE` na Query | M | A fazer |
 | **A3. Resultado sem limite** | Some o corte em 1000 linhas: o resultado é lido aos poucos (cursor no servidor), a grade mostra uma janela e rola por milhões de linhas, com contagem e exportação do resultado inteiro | G | A fazer |
 | **A4. Autocompletar (Tab)** | Na Query, `Tab` abre uma lista como o terminal: tabelas e visões (depois de `FROM`, `JOIN`, `INTO`, `UPDATE`), colunas (de `tabela.` ou das tabelas citadas), esquemas, funções e palavras do SQL; setas escolhem, Enter aceita, Esc fecha | G | A fazer |
-| **A5. Terminal firme** | Reproduzir os travamentos (psql no Brasa, saídas enormes, programas de tela cheia), achar a causa, corrigir e deixar testes de estresse; meta: `SELECT` de milhões de linhas no psql sem travar a janela | G | A fazer |
+| **A5. Terminal firme** | Reproduzir os travamentos (psql no Brasa, saídas enormes, programas de tela cheia), achar a causa, corrigir e deixar testes de estresse; meta: `SELECT` de milhões de linhas no psql sem travar a janela | G | Feito em parte: achado e corrigido um deadlock (escrever no PTY travava a interface quando o programa despejava saída sem ler a entrada); testes de 3 milhões de linhas e de psql com 2 milhões. Sem conferência na janela real |
 | **M5. Sixel (terminal)** | Segundo protocolo de imagem, reaproveitando o desenho do Kitty | M | A fazer |
 | **M6. Lançamento 1.5.0** | Versão, README, tag, release conferida | P | Por último |
 

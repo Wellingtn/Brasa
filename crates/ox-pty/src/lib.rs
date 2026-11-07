@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -293,7 +294,8 @@ pub fn default_shell() -> String {
 struct Session {
     pid: Option<u32>,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// fila de escrita: uma thread própria grava no terminal, para quem chama nunca ficar preso
+    input: mpsc::Sender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
 }
 
@@ -336,13 +338,24 @@ impl PtyManager {
         let pid = child.process_id();
         drop(pair.slave); // sem isso o leitor nunca recebe EOF
         let mut reader = pair.master.try_clone_reader().map_err(pty_err)?;
-        let writer = pair.master.take_writer().map_err(pty_err)?;
+        let mut writer = pair.master.take_writer().map_err(pty_err)?;
+        // Escrever direto trava quando o programa despeja saída e não lê a entrada (psql, make...): a interface
+        // parava de consumir a saída, o leitor parava, o programa ficava preso na saída e nunca lia. Uma thread
+        // só para escrever desfaz o nó; a ordem dos bytes é mantida pela fila.
+        let (input, queue) = mpsc::channel::<Vec<u8>>();
+        std::thread::Builder::new().name(format!("pty-writer-{}", self.next_id.load(Ordering::Relaxed) + 1)).spawn(move || {
+            while let Ok(data) = queue.recv() {
+                if writer.write_all(&data).and_then(|_| writer.flush()).is_err() {
+                    break;
+                }
+            }
+        })?;
 
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         self.sessions
             .lock()
             .unwrap()
-            .insert(id, Session { pid, master: pair.master, writer, child });
+            .insert(id, Session { pid, master: pair.master, input, child });
 
         std::thread::Builder::new()
             .name(format!("pty-reader-{id}"))
@@ -360,11 +373,9 @@ impl PtyManager {
     }
 
     pub fn write(&self, id: SessionId, data: &[u8]) -> Result<(), PtyError> {
-        let mut map = self.sessions.lock().unwrap();
-        let s = map.get_mut(&id).ok_or(PtyError::NoSession(id))?;
-        s.writer.write_all(data)?;
-        s.writer.flush()?;
-        Ok(())
+        let map = self.sessions.lock().unwrap();
+        let s = map.get(&id).ok_or(PtyError::NoSession(id))?;
+        s.input.send(data.to_vec()).map_err(|_| PtyError::Io(std::io::Error::from(std::io::ErrorKind::BrokenPipe)))
     }
 
     /// Injeta um comando (possivelmente multilinha) como se tivesse sido digitado e confirmado com Enter.
@@ -435,6 +446,36 @@ mod tests {
             let _ = self.0.lock().unwrap().send(b.to_vec());
         }
         fn on_exit(&self, _: SessionId) {}
+    }
+
+    /// Consumidor lento, como uma interface ocupada: cada pedaço de saída demora a ser aceito.
+    struct Slow;
+    impl PtyEvents for Slow {
+        fn on_output(&self, _: SessionId, _: &[u8]) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        fn on_exit(&self, _: SessionId) {}
+    }
+
+    /// Regressão do travamento no psql: o programa despeja saída sem ler a entrada, e escrever nele (colar, respostas
+    /// do terminal) não pode prender quem chama.
+    #[test]
+    fn writing_to_a_busy_program_never_blocks_the_caller() {
+        let mgr = Arc::new(PtyManager::new());
+        let id = mgr.spawn(SpawnConfig { shell: Some("/bin/sh".into()), ..Default::default() }, Arc::new(Slow)).unwrap();
+        mgr.run_command(id, "stty raw -echo; yes | head -c 300000000").unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        let (done_tx, done_rx) = mpsc::channel();
+        let m2 = mgr.clone();
+        std::thread::spawn(move || {
+            // 1 MB: bem mais do que cabe na fila do terminal
+            let r = m2.write(id, &vec![b'x'; 1 << 20]);
+            let _ = done_tx.send(r.is_ok());
+        });
+        assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)), Ok(true), "write travou");
+        // as outras chamadas também seguem livres
+        assert!(mgr.resize(id, 100, 30).is_ok());
+        mgr.kill(id).unwrap();
     }
 
     #[test]
