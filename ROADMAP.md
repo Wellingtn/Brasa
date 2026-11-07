@@ -12,6 +12,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
 | 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
 | 1.4.0 | Banco de dados: PostgreSQL (com TLS) e SQLite, edição na grade, Query com scripts e triggers, diagrama | Publicada (1.4.0) |
+| 1.5.1 | Correção: CPU parada alta (22%) depois de uma saída com mais de 10 mil linhas | Publicada (1.5.1) |
 | 1.5.0 | Banco de dados, segunda parte: editor de Query completo, autocompletar com Tab, resultado sem limite de linhas, exportar, índices/triggers/funções, cancelar e histórico, grade só leitura (dados por SQL), cursor nos formulários, Sixel, correção do travamento do terminal com psql | Publicada (1.5.0) |
 | 2.0.0 | macOS e Windows | A fazer |
 
