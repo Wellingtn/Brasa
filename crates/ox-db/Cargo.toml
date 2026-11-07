@@ -1,0 +1,13 @@
+[package]
+name = "ox-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Acesso a bancos SQLite: esquema, consultas com limite e tempo máximo e edição de linhas"
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
