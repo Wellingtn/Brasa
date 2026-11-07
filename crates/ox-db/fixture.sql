@@ -15,3 +15,5 @@ CREATE VIEW adultos AS SELECT nome FROM pessoas WHERE idade >= 30;
 CREATE SCHEMA extra;
 CREATE TABLE extra.log (id bigserial PRIMARY KEY, msg text);
 CREATE INDEX idx_nome ON pessoas(nome);
+CREATE FUNCTION carimbo() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.rotulo := coalesce(NEW.rotulo, 'sem rótulo'); RETURN NEW; END $$;
+CREATE TRIGGER trg_carimbo BEFORE INSERT ON tags_pessoas FOR EACH ROW EXECUTE FUNCTION carimbo();

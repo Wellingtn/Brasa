@@ -35,6 +35,7 @@ const CHAR_W: f32 = 7.3;
 pub enum View {
     Data,
     Structure,
+    Objects,
     Diagram,
     Result,
 }
@@ -173,6 +174,8 @@ pub struct DbPane {
     pub kind: &'static str,
     pub label: String,
     pub tables: Vec<Table>,
+    /// índices, triggers, funções e sequências do banco
+    pub objects: Vec<ox_db::DbObject>,
     pub selected: Option<usize>,
     pub view: View,
     pub page: Option<Page>,
@@ -225,6 +228,7 @@ impl Default for DbPane {
             kind: "",
             label: String::new(),
             tables: Vec::new(),
+            objects: Vec::new(),
             selected: None,
             view: View::Data,
             page: None,
@@ -426,9 +430,11 @@ impl Workspace {
     /// Guarda um banco recém-aberto no painel e carrega a primeira tabela.
     fn adopt_db(&mut self, db: Db, tables: Vec<Table>, active: Option<u64>, name: String, read_only: bool, cx: &mut Context<Self>) {
         let (kind, label) = (db.kind(), db.label());
+        let mut db = db;
+        let objects = db.objects().unwrap_or_default();
         let Some(p) = self.db.as_mut() else { return };
         let store = std::mem::take(&mut p.store);
-        *p = DbPane { store, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, writable: !read_only, selected: (!tables.is_empty()).then_some(0), tables, ..DbPane::default() };
+        *p = DbPane { store, db: Some(Arc::new(Mutex::new(db))), active, name, kind, label, writable: !read_only, selected: (!tables.is_empty()).then_some(0), tables, objects, ..DbPane::default() };
         self.db_load_page(cx);
     }
 
@@ -1887,7 +1893,7 @@ impl Workspace {
                     .child(div().flex_none().font_family(mono.clone()).text_size(px(10.)).text_color(rgb(c_muted())).child(format!("{ncols}")))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.focused_pane = Some(PaneKind::Db);
-                        let keep = this.db.as_ref().map(|p| p.view).filter(|v| matches!(v, View::Structure | View::Diagram)).unwrap_or(View::Data);
+                        let keep = this.db.as_ref().map(|p| p.view).filter(|v| matches!(v, View::Structure | View::Objects | View::Diagram)).unwrap_or(View::Data);
                         this.db_select_table(i, keep, cx);
                     }))
             }));
@@ -1907,6 +1913,7 @@ impl Workspace {
             .border_color(rgb(c_card_border()))
             .child(self.db_tab("db-tab-data", "Dados".into(), view == View::Data, View::Data, cx))
             .child(self.db_tab("db-tab-struct", "Estrutura".into(), view == View::Structure, View::Structure, cx))
+            .child(self.db_tab("db-tab-objs", format!("Objetos · {}", self.db.as_ref().map_or(0, |p| p.objects.len())), view == View::Objects, View::Objects, cx))
             .child(self.db_tab("db-tab-diag", "Diagrama".into(), view == View::Diagram, View::Diagram, cx));
         if let Some(n) = result_rows {
             tabs = tabs
@@ -1989,6 +1996,23 @@ impl Workspace {
                     }
                     None => div().flex_1().p_3().text_size(px(12.)).text_color(rgb(c_muted())).child("Escolha uma tabela.").into_any_element(),
                 }
+            }
+            View::Objects => {
+                let p = self.db.as_ref().unwrap();
+                let cols = ["Tipo", "Nome", "Tabela", "Definição"].map(String::from).to_vec();
+                let rows: Vec<Vec<Value>> = p
+                    .objects
+                    .iter()
+                    .map(|o| {
+                        let name = match &o.schema {
+                            Some(sc) if sc != "public" => format!("{sc}.{}", o.name),
+                            _ => o.name.clone(),
+                        };
+                        vec![Value::Text(o.kind.label().into()), Value::Text(name), o.table.clone().map_or(Value::Null, Value::Text), Value::Text(o.definition.clone())]
+                    })
+                    .collect();
+                footer_left = format!("{} objetos · clique numa célula e use Ctrl+C para copiar a definição", rows.len());
+                self.db_grid("db-objects", &cols, &rows, &[], area, false, None, cx)
             }
             View::Diagram => {
                 footer_left = format!("{n_tables} tabelas · {n_rel} relações");

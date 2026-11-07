@@ -13,7 +13,7 @@ use postgres::error::SqlState;
 use postgres::config::SslMode;
 use postgres::{Client, Config, NoTls, SimpleQueryMessage};
 
-use crate::{has_trailing_statement, quote, Change, Column, Error, ForeignKey, KeyKind, Page, QueryResult, Table, Value};
+use crate::{has_trailing_statement, quote, Change, DbObject, ObjectKind, Column, Error, ForeignKey, KeyKind, Page, QueryResult, Table, Value};
 
 /// Tempo máximo para conectar.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -356,6 +356,46 @@ impl PgDatabase {
         Ok(Page { columns: t.columns.iter().map(|c| c.name.clone()).collect(), rows: data, keys, truncated })
     }
 
+    /// Índices, triggers, funções e sequências dos esquemas do usuário, com o texto de definição que o próprio servidor
+    /// monta (`pg_get_triggerdef`, `pg_get_functiondef`, `indexdef`).
+    pub fn objects(&mut self) -> Result<Vec<DbObject>, Error> {
+        const NOT_SYSTEM: &str = "NOT IN ('pg_catalog', 'information_schema') AND";
+        let mut out = Vec::new();
+        let obj = |kind, r: &postgres::SimpleQueryRow, schema: usize, name: usize, table: Option<usize>, def: usize| DbObject {
+            kind,
+            schema: r.get(schema).map(str::to_string),
+            name: r.get(name).unwrap_or("").to_string(),
+            table: table.and_then(|t| r.get(t)).map(str::to_string),
+            definition: r.get(def).unwrap_or("").to_string(),
+        };
+        let queries: [(ObjectKind, String, Option<usize>); 4] = [
+            (ObjectKind::Index, format!("SELECT schemaname, indexname, tablename, indexdef FROM pg_indexes WHERE schemaname {NOT_SYSTEM} true ORDER BY 1, 2"), Some(2)),
+            (
+                ObjectKind::Trigger,
+                format!("SELECT n.nspname, t.tgname, c.relname, pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal AND n.nspname {NOT_SYSTEM} true ORDER BY 1, 2"),
+                Some(2),
+            ),
+            (
+                ObjectKind::Function,
+                format!("SELECT n.nspname, p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')', NULL, pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE p.prokind IN ('f', 'p') AND n.nspname {NOT_SYSTEM} true ORDER BY 1, 2"),
+                None,
+            ),
+            (
+                ObjectKind::Sequence,
+                format!("SELECT schemaname, sequencename, NULL, format('CREATE SEQUENCE %I.%I START %s INCREMENT %s MINVALUE %s MAXVALUE %s; -- último valor: %s', schemaname, sequencename, start_value, increment_by, min_value, max_value, coalesce(last_value::text, 'nenhum')) FROM pg_sequences WHERE schemaname {NOT_SYSTEM} true ORDER BY 1, 2"),
+                None,
+            ),
+        ];
+        for (kind, sql, table) in queries {
+            for m in self.simple(&sql)? {
+                if let SimpleQueryMessage::Row(r) = m {
+                    out.push(obj(kind, &r, 0, 1, table, 3));
+                }
+            }
+        }
+        Ok(out)
+    }
+
     pub fn is_writable(&self) -> bool {
         self.writable
     }
@@ -518,6 +558,26 @@ mod live {
     }
 
     const T: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn objects_list_indexes_triggers_functions_and_sequences() {
+        let Some(cfg) = cfg() else { return };
+        let _g = serial();
+        let mut db = PgDatabase::connect(&cfg).unwrap();
+        let objs = db.objects().unwrap();
+        let find = |k, n: &str| objs.iter().find(|o| o.kind == k && o.name.starts_with(n)).unwrap_or_else(|| panic!("falta {k:?} {n}"));
+        let idx = find(ObjectKind::Index, "idx_nome");
+        assert_eq!(idx.table.as_deref(), Some("pessoas"));
+        assert!(idx.definition.contains("CREATE INDEX idx_nome"));
+        let trg = find(ObjectKind::Trigger, "trg_carimbo");
+        assert_eq!(trg.table.as_deref(), Some("tags_pessoas"));
+        assert!(trg.definition.contains("BEFORE INSERT"));
+        let f = find(ObjectKind::Function, "carimbo");
+        assert!(f.definition.contains("CREATE OR REPLACE FUNCTION"), "{}", f.definition);
+        let seq = find(ObjectKind::Sequence, "pessoas_id_seq");
+        assert!(seq.definition.contains("CREATE SEQUENCE public.pessoas_id_seq"), "{}", seq.definition);
+        assert!(objs.iter().all(|o| o.schema.as_deref() != Some("pg_catalog")));
+    }
 
     #[test]
     fn schema_has_tables_views_keys_and_other_schemas() {

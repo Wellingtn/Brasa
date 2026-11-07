@@ -306,6 +306,38 @@ impl Default for Options {
     }
 }
 
+/// Tipo de um objeto do banco além das tabelas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ObjectKind {
+    Index,
+    Trigger,
+    Function,
+    Sequence,
+}
+
+impl ObjectKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            ObjectKind::Index => "índice",
+            ObjectKind::Trigger => "trigger",
+            ObjectKind::Function => "função",
+            ObjectKind::Sequence => "sequência",
+        }
+    }
+}
+
+/// Um índice, trigger, função ou sequência, com o texto que o define (para ler e copiar).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DbObject {
+    pub kind: ObjectKind,
+    /// esquema (PostgreSQL); `None` no SQLite
+    pub schema: Option<String>,
+    pub name: String,
+    /// a tabela a que pertence (índices e triggers)
+    pub table: Option<String>,
+    pub definition: String,
+}
+
 /// Uma mudança pedida na grade. Todas as pendentes vão juntas, numa transação: ou entram todas ou nenhuma.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
@@ -463,6 +495,31 @@ impl Database {
             rows.push(data);
         }
         Ok(Page { columns: t.columns.iter().map(|c| c.name.clone()).collect(), rows, keys, truncated: res.truncated })
+    }
+
+    /// Índices, triggers e sequências (`AUTOINCREMENT`) do arquivo, com o `CREATE` de cada um.
+    pub fn objects(&self) -> Result<Vec<DbObject>, Error> {
+        let mut out = Vec::new();
+        let mut st = self.conn.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE type IN ('index', 'trigger') AND name NOT LIKE 'sqlite_%' ORDER BY type, name COLLATE NOCASE").map_err(map_err)?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))).map_err(map_err)?;
+        for r in rows {
+            let (kind, name, table, sql) = r.map_err(map_err)?;
+            // índice criado pelo próprio banco (chave primária, UNIQUE) não tem texto: mostra de onde veio
+            let definition = sql.unwrap_or_else(|| "(criado automaticamente por uma restrição da tabela)".into());
+            out.push(DbObject { kind: if kind == "index" { ObjectKind::Index } else { ObjectKind::Trigger }, schema: None, name, table: Some(table), definition });
+        }
+        // sequências: a tabela interna sqlite_sequence só existe quando alguma tabela usa AUTOINCREMENT
+        let has_seq: i64 = self.conn.query_row("SELECT count(*) FROM sqlite_master WHERE name = 'sqlite_sequence'", [], |r| r.get(0)).map_err(map_err)?;
+        if has_seq > 0 {
+            let mut st = self.conn.prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name COLLATE NOCASE").map_err(map_err)?;
+            let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(map_err)?;
+            for r in rows {
+                let (table, seq) = r.map_err(map_err)?;
+                out.push(DbObject { kind: ObjectKind::Sequence, schema: None, name: format!("{table}.rowid"), table: Some(table), definition: format!("AUTOINCREMENT: último valor usado = {seq}") });
+            }
+        }
+        out.sort_by(|a, b| (a.kind, a.name.to_lowercase()).cmp(&(b.kind, b.name.to_lowercase())));
+        Ok(out)
     }
 
     /// Passa a abrir para escrita (ou volta a só leitura) reabrindo o arquivo.
@@ -624,6 +681,14 @@ impl Db {
         }
     }
 
+    /// Índices, triggers, funções e sequências, com a definição de cada um.
+    pub fn objects(&mut self) -> Result<Vec<DbObject>, Error> {
+        match self {
+            Db::Sqlite(d) => d.objects(),
+            Db::Postgres(d) => d.objects(),
+        }
+    }
+
     /// Liga ou desliga a escrita. Em PostgreSQL muda o padrão da sessão; em SQLite reabre o arquivo.
     pub fn set_writable(&mut self, on: bool) -> Result<(), Error> {
         match self {
@@ -703,6 +768,35 @@ mod tests {
     }
 
     const T: Duration = Duration::from_secs(5);
+
+    #[test]
+    fn sqlite_objects_list_indexes_triggers_and_autoincrement() {
+        let (_d, p) = sample();
+        let c = Connection::open(&p).unwrap();
+        c.execute_batch("CREATE TABLE auto (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT); INSERT INTO auto (v) VALUES ('a'), ('b');
+             CREATE TRIGGER trg_log AFTER INSERT ON solta BEGIN INSERT INTO sem_rowid VALUES (new.x, 'log'); END;").unwrap();
+        drop(c);
+        let objs = ro(&p).objects().unwrap();
+        let idx = objs.iter().find(|o| o.name == "idx_nome").unwrap();
+        assert_eq!((idx.kind, idx.table.as_deref()), (ObjectKind::Index, Some("pessoas")));
+        assert!(idx.definition.starts_with("CREATE INDEX"));
+        // índices internos (sqlite_autoindex_*) não entram na lista
+        assert!(objs.iter().all(|o| !o.name.starts_with("sqlite_")));
+        let trg = objs.iter().find(|o| o.kind == ObjectKind::Trigger).unwrap();
+        assert_eq!((trg.name.as_str(), trg.table.as_deref()), ("trg_log", Some("solta")));
+        assert!(trg.definition.contains("AFTER INSERT"));
+        let seq = objs.iter().find(|o| o.kind == ObjectKind::Sequence).unwrap();
+        assert_eq!(seq.table.as_deref(), Some("auto"));
+        assert!(seq.definition.ends_with("= 2"), "{}", seq.definition);
+    }
+
+    #[test]
+    fn sqlite_objects_empty_without_sequences_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("v.db");
+        Connection::open(&p).unwrap().execute_batch("CREATE TABLE t (a)").unwrap();
+        assert!(ro(&p).objects().unwrap().is_empty());
+    }
 
     #[test]
     fn schema_lists_tables_views_columns_keys_and_indexes() {
