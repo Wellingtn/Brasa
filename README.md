@@ -13,6 +13,8 @@
 
 <img src="docs/captura.png" alt="Brasa com um terminal mostrando uma imagem, o gerenciador de arquivos e o painel de CPU" width="860">
 
+<img src="docs/banco.png" alt="Página Banco do Brasa: diagrama das tabelas de um PostgreSQL e a Query fixa embaixo" width="860">
+
 </div>
 
 ## Por que Brasa

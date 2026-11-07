@@ -11,7 +11,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
 | 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
-| 1.4.0 | Editor de banco de dados (SQLite primeiro) | A fazer |
+| 1.4.0 | Banco de dados: PostgreSQL (com TLS) e SQLite, edição na grade, Query com scripts e triggers, diagrama | Em lançamento |
 | 2.0.0 | macOS e Windows | A fazer |
 
 ## Pendências e débitos (o que ficou sem fechar)
