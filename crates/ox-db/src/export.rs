@@ -175,6 +175,45 @@ pub fn export_table(db: &mut Db, t: &Table, sort: Option<(&str, bool)>, format: 
     result
 }
 
+/// Exporta o resultado inteiro de uma query (que devolve linhas), lido aos poucos do banco: milhões de linhas cabem
+/// sem ocupar memória. Devolve quantas linhas gravou. Se algo falhar no meio, o arquivo parcial é apagado.
+pub fn export_query(db: &mut Db, sql: &str, format: Format, path: &Path) -> Result<u64, Error> {
+    let file = std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| io_err(e, path))?;
+    let mut w = std::io::BufWriter::new(file);
+    let result = (|| -> Result<u64, Error> {
+        let (mut started, mut written) = (false, 0u64);
+        db.stream(sql, CHUNK, &mut |columns, rows| {
+            if !started {
+                started = true;
+                match format {
+                    Format::Csv => w.write_all(csv_line(columns.iter().map(|c| csv_field(&Value::Text(c.clone())))).as_bytes()),
+                    Format::Json => w.write_all(b"["),
+                }
+                .map_err(|e| io_err(e, path))?;
+            }
+            for r in rows {
+                match format {
+                    Format::Csv => w.write_all(csv_line(r.iter().map(csv_field)).as_bytes()),
+                    Format::Json => w.write_all(format!("{}\n  {}", if written == 0 { "" } else { "," }, json_object(columns, r)).as_bytes()),
+                }
+                .map_err(|e| io_err(e, path))?;
+                written += 1;
+            }
+            Ok(())
+        })?;
+        if format == Format::Json {
+            w.write_all(if written == 0 { b"]\n".as_slice() } else { b"\n]\n".as_slice() }).map_err(|e| io_err(e, path))?;
+        }
+        w.flush().map_err(|e| io_err(e, path))?;
+        Ok(written)
+    })();
+    if result.is_err() {
+        drop(w);
+        let _ = std::fs::remove_file(path);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +333,29 @@ mod tests {
         assert_eq!(export_table(&mut db, &t, None, Format::Json, &p).unwrap(), 2);
         assert!(matches!(export_table(&mut db, &t, None, Format::Json, &p), Err(Error::Sql(m)) if m.contains("já existe")));
         assert_eq!(std::fs::read_to_string(&p).unwrap().lines().count(), 4);
+    }
+
+    #[test]
+    fn a_whole_query_result_is_exported_past_the_old_limit_without_holding_it_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("b.db");
+        let c = rusqlite::Connection::open(&p).unwrap();
+        c.execute_batch("CREATE TABLE n (i INTEGER, t TEXT); WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 25000) INSERT INTO n SELECT i, 'linha ' || i FROM s;").unwrap();
+        drop(c);
+        let mut db = Db::Sqlite(Database::open(&p, &Options::default()).unwrap());
+        let out = dir.path().join("q.csv");
+        assert_eq!(export_query(&mut db, "SELECT i, t FROM n ORDER BY i;", Format::Csv, &out).unwrap(), 25000);
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(text.lines().count(), 25001);
+        assert!(text.starts_with("i,t\r\n1,linha 1\r\n") || text.starts_with("i,t\n1,linha 1\n"), "{:?}", &text[..30]);
+        // sem linhas: só o cabeçalho; JSON vazio
+        let out2 = dir.path().join("v.json");
+        assert_eq!(export_query(&mut db, "SELECT i FROM n WHERE i < 0", Format::Json, &out2).unwrap(), 0);
+        assert_eq!(std::fs::read_to_string(&out2).unwrap().trim(), "[]");
+        // erro: nada fica
+        let out3 = dir.path().join("e.csv");
+        assert!(export_query(&mut db, "SELECT * FROM nao_existe", Format::Csv, &out3).is_err());
+        assert!(!out3.exists());
     }
 
     #[test]

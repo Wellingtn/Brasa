@@ -487,6 +487,39 @@ impl PgDatabase {
     /// leitura (`SELECT`, `WITH`, `VALUES`, `TABLE`) vai por cursor e traz no máximo `limit` linhas; o resto roda direto
     /// e o resultado é o do último conjunto de linhas, cortado em `limit`. O que o usuário abrir com `BEGIN` continua
     /// aberto entre uma execução e outra, e as consultas de leitura não o desfazem.
+    /// Lê o resultado de uma query aos poucos (cursor no servidor), entregando `chunk` linhas por vez a `f`, sem guardar
+    /// tudo na memória. Devolve quantas linhas passaram. Cada pedaço tem até 10 minutos.
+    pub fn stream(&mut self, sql: &str, chunk: usize, f: &mut dyn FnMut(&[String], &[Vec<Value>]) -> Result<(), Error>) -> Result<u64, Error> {
+        self.set_timeout(Duration::from_secs(600))?;
+        let sql = sql.trim().trim_end_matches(';');
+        let in_tx = self.in_user_tx()?;
+        if !in_tx {
+            self.client.batch_execute("BEGIN").map_err(map_pg)?;
+        }
+        let run = (|| -> Result<u64, Error> {
+            self.client.batch_execute(&format!("DECLARE brasa_cursor NO SCROLL CURSOR FOR {sql}")).map_err(map_pg)?;
+            let (mut total, mut columns) = (0u64, Vec::new());
+            loop {
+                let (cols, rows, _) = collect(self.simple(&format!("FETCH {chunk} FROM brasa_cursor"))?);
+                if columns.is_empty() {
+                    columns = cols;
+                }
+                total += rows.len() as u64;
+                let last = rows.len() < chunk;
+                f(&columns, &rows)?;
+                if last {
+                    return Ok(total);
+                }
+            }
+        })();
+        if in_tx {
+            let _ = self.client.batch_execute("CLOSE brasa_cursor");
+        } else {
+            let _ = self.client.batch_execute("ROLLBACK");
+        }
+        run
+    }
+
     pub fn query(&mut self, sql: &str, limit: usize, timeout: Duration) -> Result<QueryResult, Error> {
         let started = Instant::now();
         self.set_timeout(timeout)?;
@@ -878,6 +911,28 @@ mod live {
         assert!(started.elapsed() < Duration::from_secs(4), "{:?}", started.elapsed());
         t.join().unwrap();
         assert_eq!(db.query("SELECT 1 AS um", 10, T).unwrap().rows[0][0], Value::Text("1".into()));
+    }
+
+    #[test]
+    fn a_big_result_streams_in_chunks_and_windows_reach_the_end() {
+        let Some(cfg) = cfg() else { return };
+        let _g = serial();
+        let mut db = crate::Db::Postgres(PgDatabase::connect(&cfg).unwrap());
+        let sql = "SELECT i, md5(i::text) AS h FROM generate_series(1, 120000) i";
+        let (mut chunks, mut seen) = (0, 0u64);
+        let n = db.stream(sql, 5000, &mut |cols, rows| {
+            assert_eq!(cols, ["i", "h"]);
+            chunks += 1;
+            seen += rows.len() as u64;
+            Ok(())
+        });
+        assert_eq!((n.unwrap(), seen, chunks), (120_000, 120_000, 25));
+        // a conexão continua boa depois do fluxo
+        assert_eq!(db.count(sql, T).unwrap(), 120_000);
+        let w = db.window(&format!("{sql} ORDER BY i"), 119_500, 1000).unwrap();
+        assert_eq!((w.rows.len(), w.truncated, w.rows[0][0].clone()), (500, false, Value::Text("119501".into())));
+        let w = db.window(sql, 0, 1000).unwrap();
+        assert!(w.truncated && w.rows.len() == 1000);
     }
 
     #[test]

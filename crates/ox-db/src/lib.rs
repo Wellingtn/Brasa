@@ -10,7 +10,7 @@ mod export;
 mod history;
 mod pg;
 mod saved;
-pub use export::{export_table, to_csv, to_json, to_tsv, write_result, Format};
+pub use export::{export_query, export_table, to_csv, to_json, to_tsv, write_result, Format};
 pub use pg::{is_local_host, PgConfig, PgDatabase};
 pub use history::History;
 pub use saved::{Kind, SavedConn, Store};
@@ -205,6 +205,18 @@ impl Table {
 /// Há outra instrução depois do primeiro `;`? Respeita textos entre aspas, nomes entre aspas ou colchetes, texto entre
 /// `$$ ... $$` (ou `$tag$ ... $tag$`) e comentários, e ignora `;` repetidos e espaços no fim. Só serve para decidir se
 /// um texto é uma instrução só (e pode ir por cursor); scripts com várias instruções rodam inteiros.
+/// É uma instrução só que devolve linhas e dá para fatiar com `LIMIT`/`OFFSET` (`SELECT`, `VALUES`, `TABLE`, `WITH`
+/// sem comandos que escrevem)? Scripts e comandos como `INSERT` não são.
+pub fn is_plain_select(sql: &str) -> bool {
+    let t = sql.trim().trim_end_matches(';').trim_end();
+    let first = t.split(|c: char| !c.is_ascii_alphabetic()).find(|w| !w.is_empty()).unwrap_or("").to_lowercase();
+    if !matches!(first.as_str(), "select" | "with" | "values" | "table") || has_trailing_statement(t) {
+        return false;
+    }
+    // WITH ... INSERT/UPDATE/DELETE ... RETURNING escreve e não cabe dentro de uma subconsulta
+    !(first == "with" && t.to_lowercase().split(|c: char| !c.is_ascii_alphanumeric() && c != '_').any(|w| matches!(w, "insert" | "update" | "delete")))
+}
+
 pub(crate) fn has_trailing_statement(sql: &str) -> bool {
     let b = sql.as_bytes();
     let (mut i, mut ended) = (0, false);
@@ -497,6 +509,27 @@ impl Database {
         Ok(last.unwrap_or(QueryResult { columns: Vec::new(), rows: Vec::new(), truncated: false, elapsed: Duration::ZERO, changes: Some(if any { changes } else { 0 }) }))
     }
 
+    /// Lê o resultado de uma query aos poucos, `chunk` linhas por vez, sem guardar tudo. Sem tempo máximo: quem chama
+    /// pode cancelar. Devolve quantas linhas passaram.
+    pub fn stream(&self, sql: &str, chunk: usize, f: &mut dyn FnMut(&[String], &[Vec<Value>]) -> Result<(), Error>) -> Result<u64, Error> {
+        let mut st = self.conn.prepare(sql.trim().trim_end_matches(';')).map_err(map_err)?;
+        let cols = st.column_count();
+        let columns: Vec<String> = st.column_names().into_iter().map(str::to_string).collect();
+        let mut rows = st.query([]).map_err(map_err)?;
+        let (mut buf, mut total) = (Vec::with_capacity(chunk), 0u64);
+        while let Some(r) = rows.next().map_err(map_err)? {
+            buf.push((0..cols).map(|i| r.get_ref(i).map(read_value)).collect::<Result<Vec<_>, _>>().map_err(map_err)?);
+            if buf.len() >= chunk {
+                total += buf.len() as u64;
+                f(&columns, &buf)?;
+                buf.clear();
+            }
+        }
+        total += buf.len() as u64;
+        f(&columns, &buf)?;
+        Ok(total)
+    }
+
     /// Uma página de uma tabela ou visão, na ordem de `sort` (coluna, crescente), com a chave de cada linha.
     pub fn page(&self, table: &str, sort: Option<(&str, bool)>, offset: usize, limit: usize) -> Result<Page, Error> {
         let t = self.table(table)?;
@@ -707,6 +740,34 @@ impl Db {
         match self {
             Db::Sqlite(d) => d.is_read_only(),
             Db::Postgres(d) => !d.is_writable(),
+        }
+    }
+
+    /// Lê o resultado de uma query aos poucos (ver `Database::stream`).
+    pub fn stream(&mut self, sql: &str, chunk: usize, f: &mut dyn FnMut(&[String], &[Vec<Value>]) -> Result<(), Error>) -> Result<u64, Error> {
+        match self {
+            Db::Sqlite(d) => d.stream(sql, chunk, f),
+            Db::Postgres(d) => d.stream(sql, chunk, f),
+        }
+    }
+
+    /// Um trecho (`count` linhas a partir de `offset`) do resultado de uma query que devolve linhas (ver
+    /// [`is_plain_select`]). `truncated` diz se há mais linhas depois do trecho. Sem ORDER BY a ordem entre
+    /// trechos não é garantida pelo banco.
+    pub fn window(&mut self, sql: &str, offset: usize, count: usize) -> Result<QueryResult, Error> {
+        let inner = sql.trim().trim_end_matches(';');
+        let wrapped = format!("SELECT * FROM ({inner}\n) AS brasa_q LIMIT {} OFFSET {offset}", count + 1);
+        self.query(&wrapped, count, DEFAULT_TIMEOUT)
+    }
+
+    /// Quantas linhas a query devolve. Pode demorar em tabelas enormes: até `timeout`.
+    pub fn count(&mut self, sql: &str, timeout: Duration) -> Result<u64, Error> {
+        let inner = sql.trim().trim_end_matches(';');
+        let r = self.query(&format!("SELECT count(*) FROM ({inner}\n) AS brasa_q"), 1, timeout)?;
+        match r.rows.first().and_then(|r| r.first()) {
+            Some(Value::Integer(n)) => Ok((*n).max(0) as u64),
+            Some(Value::Text(t)) => t.parse().map_err(|_| Error::Sql("contagem inválida".into())),
+            _ => Err(Error::Sql("contagem inválida".into())),
         }
     }
 
@@ -955,6 +1016,34 @@ mod tests {
         assert_eq!((r.rows.len(), r.truncated), (2, true));
         let all = db.query("SELECT id FROM pessoas", 3, T).unwrap();
         assert_eq!((all.rows.len(), all.truncated), (3, false));
+    }
+
+    #[test]
+    fn windows_walk_through_a_result_of_any_size_and_count_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("w.db");
+        let c = Connection::open(&p).unwrap();
+        c.execute_batch("CREATE TABLE n (i INTEGER); WITH RECURSIVE s(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM s WHERE i < 5000) INSERT INTO n SELECT i FROM s;").unwrap();
+        drop(c);
+        let mut db = Db::Sqlite(ro(&p));
+        let sql = "SELECT i FROM n ORDER BY i -- comentário no fim";
+        assert!(is_plain_select(sql));
+        let w = db.window(sql, 0, 1000).unwrap();
+        assert_eq!((w.rows.len(), w.truncated, w.rows[0][0].clone(), w.rows[999][0].clone()), (1000, true, Value::Integer(1), Value::Integer(1000)));
+        let w = db.window(sql, 4500, 1000).unwrap();
+        assert_eq!((w.rows.len(), w.truncated, w.rows[0][0].clone()), (500, false, Value::Integer(4501)));
+        assert_eq!(db.window(sql, 9000, 1000).unwrap().rows.len(), 0);
+        assert_eq!(db.count(sql, T).unwrap(), 5000);
+    }
+
+    #[test]
+    fn only_a_single_row_returning_statement_can_be_windowed() {
+        for ok in ["select 1", "  SELECT * FROM t;", "with a as (select 1) select * from a", "values (1), (2)", "table t", "select ';' as x"] {
+            assert!(is_plain_select(ok), "{ok}");
+        }
+        for no in ["insert into t values (1)", "select 1; select 2", "update t set a = 1", "with d as (delete from t returning *) select * from d", "create table x (a int)", "", "-- só comentário"] {
+            assert!(!is_plain_select(no), "{no}");
+        }
     }
 
     #[test]
