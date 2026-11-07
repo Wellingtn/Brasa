@@ -11,7 +11,7 @@ Esforço: P = dias, M = 1–2 semanas, G = várias semanas.
 | 1.1.0 | Configurações, temas por cor e fundo, fontes, busca global (`Ctrl+K`), atalhos configuráveis, aviso de versão | Publicada |
 | 1.2.x | Atualização dentro do app, histórico inteligente e `Ctrl+R`, notas com variáveis e "Rodar todos", `.rpm` e Flatpak, método de latência | Publicada (1.2.3) |
 | 1.3.0 | SSH integrado (`Ctrl+Shift+H`) e imagens no terminal (protocolo Kitty) | Publicada (1.3.0) |
-| 1.4.0 | MCP | A fazer |
+| 1.4.0 | MCP: motor, aba de servidores e ferramentas, Brasa como servidor | Em andamento |
 | 1.5.0 | Editor de banco de dados (SQLite primeiro) | A fazer |
 | 2.0.0 | macOS e Windows | A fazer |
 
@@ -106,8 +106,22 @@ Quatro marcos. A vazão com saída enorme ficou de fora por decisão anterior (j
 - Pronto quando: `chafa -f kitty` mostra a imagem na proporção certa e rola com o texto; imagem enorme, pedido de arquivo e lixo na sequência não travam o app (verificado).
 
 ## 1.4.0 — MCP (M a G)
-- Conectar servidores MCP e mostrar as ferramentas deles.
-- Um assistente poder usar blocos e notas do Brasa.
+
+O Brasa não tem assistente de IA próprio, e isso muda o tamanho da versão. O motor MCP (falar com os servidores) serve a qualquer cenário e vem primeiro; quem usa as ferramentas fica para o fim, e a escolha está em aberto.
+
+| Marco | O que entra | Esforço | Situação |
+|---|---|---|---|
+| **M1. Motor MCP** | Crate `ox-mcp`: ler `mcp.json` (formato `mcpServers`), abrir o servidor como processo, `initialize`, listar ferramentas, recursos e prompts, chamar ferramentas, guardar o `stderr` | M | Código e testes prontos (11, com servidor de mentira); falta provar com um servidor MCP real |
+| **M2. Aba MCP** | Lista de servidores com estado (rodando, erro) e reiniciar; ferramentas de cada um com liga/desliga; log do `stderr`; formulário para adicionar servidor; botão para chamar uma ferramenta à mão com argumentos | M a G | A fazer |
+| **M3. Brasa como servidor MCP** | Expor as notas e os blocos do Brasa para assistentes de fora (Claude, outros): ler notas, buscar, rodar bloco com aprovação | M | A fazer |
+| **M4. Assistente dentro do Brasa (opcional)** | Chat que usa as ferramentas dos servidores. Exige escolher o provedor de IA e guardar a chave de API | G | Decisão em aberto |
+| **M5. Lançamento 1.4.0** | Versão, README, captura, tag, release conferida | P | Por último |
+
+### M1. Motor MCP
+- Configuração em `~/.config/brasa/mcp.json`, no formato do ecossistema (`mcpServers` com `command`, `args`, `env`). O arquivo guarda chaves de API, então é criado só para o dono (modo 0600).
+- Transporte stdio: uma mensagem JSON por linha, no `stdin` e `stdout` do processo. HTTP (o transporte que substituiu o SSE nas versões novas do protocolo) fica para depois.
+- Ciclo: abrir o processo, `initialize` com a versão do protocolo e `notifications/initialized`, depois `tools/list`, `resources/list` e `prompts/list` (com paginação) conforme o que o servidor declara; `tools/call`; encerrar fechando o `stdin` e, se não sair, matando o processo. Tempo limite em toda pergunta.
+- Pronto quando: testes com um servidor de mentira cobrem o handshake, a listagem, a chamada, o erro do servidor, o tempo esgotado e o processo que morre; e um servidor MCP de verdade (o de arquivos) lista e chama ferramentas.
 
 ## 1.5.0 — Editor de banco de dados (G)
 - Primeiro SQLite (sem servidor, mais fácil), depois PostgreSQL e MySQL.
